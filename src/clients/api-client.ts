@@ -81,6 +81,18 @@ export class ApiClient {
     return {};
   }
 
+  extractUserIdFromJwt(token: string): string | undefined {
+    try {
+      const parts = token.split('.');
+      if (parts.length < 2) return undefined;
+      const json = Buffer.from(parts[1], 'base64url').toString('utf8');
+      const payload = JSON.parse(json) as { id?: string; sub?: string };
+      return payload.id || payload.sub;
+    } catch {
+      return undefined;
+    }
+  }
+
   async login(
     credentials: {
       email: string;
@@ -89,7 +101,7 @@ export class ApiClient {
     silent = false,
   ): Promise<{ user?: { id: string }; accessToken?: string }> {
     const res = await this.request<{
-      user: { id: string };
+      user?: { id: string };
       auth: { accessToken: string; refreshToken?: string };
     }>(
       '/users/login',
@@ -102,9 +114,14 @@ export class ApiClient {
     );
 
     if (res.ok && res.data) {
+      const accessToken = res.data.auth?.accessToken;
+      let userId = res.data.user?.id;
+      if (!userId && accessToken) {
+        userId = this.extractUserIdFromJwt(accessToken);
+      }
       return {
-        user: res.data.user,
-        accessToken: res.data.auth?.accessToken,
+        user: userId ? { id: userId } : undefined,
+        accessToken,
       };
     }
     return {};
