@@ -5,6 +5,7 @@ export interface UserAuthCredentials {
   id: string;
   email: string;
   pseudo: string;
+  password?: string;
   accessToken: string;
   refreshToken?: string;
   role: 'VOLUNTEER' | 'ORGANIZER';
@@ -22,6 +23,7 @@ export class ApiClient {
     endpoint: string,
     options: RequestInit = {},
     token?: string,
+    silent = false,
   ): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
     const url = `${this.baseUrl}${endpoint}`;
     const headers: Record<string, string> = {
@@ -37,7 +39,9 @@ export class ApiClient {
       const res = await fetch(url, { ...options, headers });
       if (!res.ok) {
         const text = await res.text();
-        console.warn(`[ApiClient] ⚠️ ${options.method || 'GET'} ${url} returned ${res.status}: ${text}`);
+        if (!silent) {
+          console.warn(`[ApiClient] ⚠️ ${options.method || 'GET'} ${url} returned ${res.status}: ${text}`);
+        }
         return { ok: false, status: res.status, error: text };
       }
       if (res.status === 204) {
@@ -47,7 +51,9 @@ export class ApiClient {
       return { ok: true, status: res.status, data };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      console.error(`[ApiClient] 💥 Network/Fetch error on ${options.method || 'GET'} ${url}: ${errMsg}`);
+      if (!silent) {
+        console.error(`[ApiClient] 💥 Network/Fetch error on ${options.method || 'GET'} ${url}: ${errMsg}`);
+      }
       return { ok: false, status: 0, error: errMsg };
     }
   }
@@ -75,17 +81,25 @@ export class ApiClient {
     return {};
   }
 
-  async login(credentials: {
-    email: string;
-    password: string;
-  }): Promise<{ user?: { id: string }; accessToken?: string }> {
+  async login(
+    credentials: {
+      email: string;
+      password: string;
+    },
+    silent = false,
+  ): Promise<{ user?: { id: string }; accessToken?: string }> {
     const res = await this.request<{
       user: { id: string };
       auth: { accessToken: string; refreshToken?: string };
-    }>('/users/login', {
-      method: 'POST',
-      body: JSON.stringify(credentials),
-    });
+    }>(
+      '/users/login',
+      {
+        method: 'POST',
+        body: JSON.stringify(credentials),
+      },
+      undefined,
+      silent,
+    );
 
     if (res.ok && res.data) {
       return {
