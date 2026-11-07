@@ -127,4 +127,18 @@ export class ActorPool {
   getAllActors(): UserAuthCredentials[] {
     return this.actors;
   }
+
+  isSimulatedUser(userId?: string): boolean {
+    if (!userId) return false;
+    return this.actors.some((a) => a.id === userId);
+  }
+
+  getSimulatedUserIds(): Set<string> {
+    return new Set(this.actors.map((a) => a.id));
+  }
+
+  getRandomActor(excludeId?: string): UserAuthCredentials {
+    const candidates = this.actors.filter((a) => a.id !== excludeId);
+    return faker.helpers.arrayElement(candidates.length > 0 ? candidates : this.actors);
+  }
 }

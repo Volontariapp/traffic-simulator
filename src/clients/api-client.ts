@@ -268,5 +268,90 @@ export class ApiClient {
     const res = await this.request(`/social/likes/${postId}`, { method: 'POST' }, token);
     return res.ok;
   }
+
+  async listEvents(
+    token?: string,
+    params?: {
+      page?: number;
+      limit?: number;
+      onlyAvailable?: boolean;
+    },
+    silent = false,
+  ): Promise<
+    Array<{
+      id: string;
+      title: string;
+      description: string;
+      organizerId?: string;
+      maxParticipants: number;
+      currentParticipants: number;
+      state?: string;
+      startAt?: string;
+      endAt?: string;
+      localisationName?: string;
+    }>
+  > {
+    const q = new URLSearchParams({
+      page: String(params?.page ?? 1),
+      limit: String(params?.limit ?? 50),
+    });
+    if (params?.onlyAvailable !== undefined) {
+      q.set('onlyAvailable', String(params.onlyAvailable));
+    }
+    const res = await this.request<{
+      events?: Array<any>;
+      items?: Array<any>;
+    }>(`/events?${q.toString()}`, { method: 'GET' }, token, silent);
+
+    return res.data?.events ?? res.data?.items ?? [];
+  }
+
+  async listPosts(
+    token?: string,
+    params?: {
+      page?: number;
+      limit?: number;
+    },
+    silent = false,
+  ): Promise<
+    Array<{
+      id: string;
+      title: string;
+      content: string;
+      authorId?: string;
+      userId?: string;
+      eventId?: string;
+      createdAt?: string;
+    }>
+  > {
+    const q = new URLSearchParams({
+      page: String(params?.page ?? 1),
+      limit: String(params?.limit ?? 50),
+    });
+    const res = await this.request<{
+      posts?: Array<any>;
+      items?: Array<any>;
+    }>(`/posts?${q.toString()}`, { method: 'GET' }, token, silent);
+
+    return res.data?.posts ?? res.data?.items ?? [];
+  }
+
+  async createComment(
+    token: string,
+    postId: string,
+    content: string,
+    silent = false,
+  ): Promise<boolean> {
+    const res = await this.request(
+      `/posts/${postId}/comments`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      },
+      token,
+      silent,
+    );
+    return res.ok;
+  }
 }
 

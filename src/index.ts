@@ -3,6 +3,7 @@ import { MediaUploader } from './media/uploader.js';
 import { ActorPool } from './actors/actor-pool.js';
 import { ParisLiveEngine } from './engines/paris-live.engine.js';
 import { MassEventsEngine } from './engines/mass-events.engine.js';
+import { UserReactionEngine } from './engines/user-reaction.engine.js';
 
 // Configuration via variables d'environnement
 const API_GATEWAY_URL = process.env.API_GATEWAY_URL || 'http://localhost:3000';
@@ -51,19 +52,23 @@ async function bootstrap() {
     PARALLEL_DISTRICT_BATCH,
   );
   const massEventsEngine = new MassEventsEngine(apiClient, actorPool);
+  const userReactionEngine = new UserReactionEngine(apiClient, actorPool);
 
   // 3. Peuplement initial de masse si activé
   if (INITIAL_MASS_SEED) {
     await massEventsEngine.seedMassEvents(MASS_EVENTS_COUNT);
   }
 
-  // 4. Boucle d'orchestration continue (20 arrondissements en direct)
-  console.log('\n🌟 Démarrage de la boucle temps réel (20 arrondissements de Paris)...');
+  // 4. Boucle d'orchestration continue (20 arrondissements en direct + réaction utilisateur)
+  console.log('\n🌟 Démarrage de la boucle temps réel (20 arrondissements de Paris + écoute sociale)...');
 
   const runLoop = async () => {
     while (isRunning) {
       try {
-        await parisLiveEngine.tick();
+        await Promise.allSettled([
+          parisLiveEngine.tick(),
+          userReactionEngine.tick(),
+        ]);
       } catch (err) {
         console.error('[Daemon] Erreur dans la boucle de simulation :', err instanceof Error ? err.message : String(err));
       }

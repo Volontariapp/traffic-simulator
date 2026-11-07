@@ -1,7 +1,7 @@
 import { fakerFR as faker } from '@faker-js/faker';
 import type { ApiClient, UserAuthCredentials } from '../clients/api-client.js';
 import type { ActorPool } from '../actors/actor-pool.js';
-import { PARIS_DISTRICTS, type ParisLocation } from '../geo/paris-districts.js';
+import { PARIS_DISTRICTS, getRandomLocationForDistrict, type ParisLocation } from '../geo/paris-districts.js';
 import { CURATED_THEMATIC_PHOTOS, detectTheme } from '../media/photo-bank.js';
 import type { MediaUploader } from '../media/uploader.js';
 import { generateEventBlueprint } from '../templates/event-blueprints.js';
@@ -9,6 +9,7 @@ import { generateEventBlueprint } from '../templates/event-blueprints.js';
 interface ActiveDistrictEvent {
   district: number;
   slot: number;
+  location: ParisLocation;
   eventId: string;
   title: string;
   organizer: UserAuthCredentials;
@@ -68,8 +69,10 @@ export class ParisLiveEngine {
     }
   }
 
-  private async startLiveEventInDistrict(location: ParisLocation, slot: number): Promise<void> {
-    const slotKey = `${location.district}-${slot}`;
+  private async startLiveEventInDistrict(districtBase: ParisLocation, slot: number): Promise<void> {
+    const slotKey = `${districtBase.district}-${slot}`;
+    // Sélectionne une adresse réaliste et dispersée au sein de l'arrondissement pour éviter tout chevauchement
+    const location = getRandomLocationForDistrict(districtBase.district, slot);
     const organizer = this.pool.pickOrganizer();
     const blueprint = generateEventBlueprint();
     const themeKey = detectTheme(blueprint.title);
@@ -170,6 +173,7 @@ export class ParisLiveEngine {
     this.activeEvents.set(slotKey, {
       district: location.district,
       slot,
+      location,
       eventId,
       title: eventTitle,
       organizer,
