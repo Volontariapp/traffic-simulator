@@ -8,6 +8,7 @@ import { generateEventBlueprint } from '../templates/event-blueprints.js';
 
 interface ActiveDistrictEvent {
   district: number;
+  slot: number;
   eventId: string;
   title: string;
   organizer: UserAuthCredentials;
@@ -21,30 +22,45 @@ interface ActiveDistrictEvent {
 }
 
 export class ParisLiveEngine {
-  private activeEvents = new Map<number, ActiveDistrictEvent>(); // district (1-20) -> ActiveDistrictEvent
+  // key: `${district}-${slot}` -> ActiveDistrictEvent
+  private activeEvents = new Map<string, ActiveDistrictEvent>();
 
   constructor(
     private readonly client: ApiClient,
     private readonly pool: ActorPool,
     private readonly uploader: MediaUploader,
-    private readonly eventLifespanSec: number = 120, // 2 minutes par défaut pour le cycle continu
+    private readonly eventLifespanSec: number = 180,
+    private readonly eventsPerDistrict: number = 3,
+    private readonly parallelBatchSize: number = 4,
   ) {}
 
   /**
-   * Vérifie et garantit l'invariant : 1 événement IN_PROGRESS dans CHAQUE arrondissement (1 à 20).
+   * Orchestre les événements en temps réel avec parallélisme par arrondissements.
+   * Garantit l'invariant : eventsPerDistrict événements simultanés dans CHAQUE arrondissement.
    */
   async tick(): Promise<void> {
     const now = Date.now();
 
-    for (const location of PARIS_DISTRICTS) {
-      const current = this.activeEvents.get(location.district);
+    // Traitement par lots d'arrondissements en parallèle pour fluidifier le débit
+    for (let i = 0; i < PARIS_DISTRICTS.length; i += this.parallelBatchSize) {
+      const batch = PARIS_DISTRICTS.slice(i, i + this.parallelBatchSize);
+      await Promise.allSettled(
+        batch.map((location) => this.tickDistrict(location, now)),
+      );
+    }
+  }
+
+  private async tickDistrict(location: ParisLocation, now: number): Promise<void> {
+    for (let slot = 1; slot <= this.eventsPerDistrict; slot++) {
+      const slotKey = `${location.district}-${slot}`;
+      const current = this.activeEvents.get(slotKey);
 
       if (!current) {
-        // Aucun événement en cours dans cet arrondissement : en démarrer un immédiatement !
-        await this.startLiveEventInDistrict(location);
+        // Aucun événement sur ce slot : en démarrer un immédiatement
+        await this.startLiveEventInDistrict(location, slot);
       } else if (now - current.startedAt >= current.durationMs) {
-        // L'événement a atteint sa fin artificielle : le clôturer avec son post de fin
-        await this.finishLiveEvent(current, location);
+        // L'événement a atteint sa fin artificielle : le clôturer avec bilan et émargement final
+        await this.finishLiveEvent(current, location, slotKey);
       } else {
         // Événement en cours : simuler l'activité en direct (nouveaux arrivants et pointage/émargement par le créateur)
         await this.simulateLiveActivity(current, location, now);
@@ -52,14 +68,18 @@ export class ParisLiveEngine {
     }
   }
 
-  private async startLiveEventInDistrict(location: ParisLocation): Promise<void> {
+  private async startLiveEventInDistrict(location: ParisLocation, slot: number): Promise<void> {
+    const slotKey = `${location.district}-${slot}`;
     const organizer = this.pool.pickOrganizer();
     const blueprint = generateEventBlueprint();
     const themeKey = detectTheme(blueprint.title);
     const thematic = CURATED_THEMATIC_PHOTOS[themeKey];
 
+    const slotSuffix = slot === 1 ? '' : ` [Site ${slot}]`;
+    const eventTitle = `${blueprint.title} (${location.name})${slotSuffix}`;
+
     console.log(
-      `[ParisLiveEngine] 🚀 Démarrage nouvel event [${location.postalCode} - ${location.name}] : "${blueprint.title}" (Organisateur: ${organizer.pseudo})`,
+      `[ParisLiveEngine] 🚀 Démarrage event [${location.postalCode} | Slot ${slot}/${this.eventsPerDistrict}] : "${eventTitle}" (Orga: ${organizer.pseudo})`,
     );
 
     // 1. Cover photo réaliste
@@ -76,7 +96,7 @@ export class ParisLiveEngine {
 
     // 2. Création de l'événement
     const eventId = await this.client.createEvent(organizer.accessToken, {
-      title: `${blueprint.title} (${location.name})`,
+      title: eventTitle,
       description: `${blueprint.description}\n\nRendez-vous : ${location.address}.`,
       startAt,
       endAt,
@@ -87,7 +107,7 @@ export class ParisLiveEngine {
     });
 
     if (!eventId) {
-      console.warn(`[ParisLiveEngine] ⚠️ Impossible de créer l'event pour le district ${location.district}`);
+      console.warn(`[ParisLiveEngine] ⚠️ Impossible de créer l'event pour le district ${location.district} slot ${slot}`);
       return;
     }
 
@@ -147,10 +167,11 @@ export class ParisLiveEngine {
       max: Math.floor(this.eventLifespanSec * 1.3),
     });
 
-    this.activeEvents.set(location.district, {
+    this.activeEvents.set(slotKey, {
       district: location.district,
+      slot,
       eventId,
-      title: blueprint.title,
+      title: eventTitle,
       organizer,
       startedAt: Date.now(),
       durationMs: durationVarianceSec * 1000,
@@ -161,8 +182,9 @@ export class ParisLiveEngine {
       lastAttendanceCheckAt: Date.now(),
     });
 
+    const totalTarget = PARIS_DISTRICTS.length * this.eventsPerDistrict;
     console.log(
-      `[ParisLiveEngine] ✅ Event ${location.district}/20 [${location.postalCode}] LIVE pour ~${durationVarianceSec}s avec ${participants.length} bénévoles (${checkedInUserIds.size} pointés à l'arrivée)`,
+      `[ParisLiveEngine] ✅ Event [${location.postalCode}#${slot}] LIVE (${this.activeEvents.size}/${totalTarget} total) avec ${participants.length} bénévoles (${checkedInUserIds.size} pointés)`,
     );
   }
 
@@ -171,8 +193,8 @@ export class ParisLiveEngine {
     location: ParisLocation,
     now: number,
   ): Promise<void> {
-    // 1. Arrivée spontanée d'un nouveau bénévole en cours d'événement (30% de chance par tick si max non atteint)
-    if (event.participants.length < 12 && Math.random() < 0.3) {
+    // 1. Arrivée spontanée d'un nouveau bénévole en cours d'événement (20% de chance par tick si max non atteint)
+    if (event.participants.length < 15 && Math.random() < 0.2) {
       const alreadyJoinedIds = new Set(event.participants.map((p) => p.id));
       const candidates = this.pool
         .pickVolunteers(5, event.organizer.id)
@@ -187,7 +209,7 @@ export class ParisLiveEngine {
             await this.client.likePost(newVol.accessToken, event.startPostId);
           }
           console.log(
-            `[ParisLiveEngine] 🙋 Nouvelle arrivée en direct [${location.postalCode}] : ${newVol.pseudo} a rejoint "${event.title}" (${event.participants.length} inscrits)`,
+            `[ParisLiveEngine] 🙋 Arrivée [${location.postalCode}#${event.slot}] : ${newVol.pseudo} a rejoint "${event.title}" (${event.participants.length} inscrits)`,
           );
         }
       }
@@ -218,16 +240,20 @@ export class ParisLiveEngine {
           }
           const checkedNames = toCheck.map((v) => v.pseudo).join(', ');
           console.log(
-            `[ParisLiveEngine] 📋 Émargement [${location.postalCode}] : L'organisateur ${event.organizer.pseudo} a pointé [${checkedNames}] (${event.checkedInUserIds.size}/${event.participants.length} présents)`,
+            `[ParisLiveEngine] 📋 Émargement [${location.postalCode}#${event.slot}] : L'orga ${event.organizer.pseudo} a coché [${checkedNames}] (${event.checkedInUserIds.size}/${event.participants.length} présents)`,
           );
         }
       }
     }
   }
 
-  private async finishLiveEvent(event: ActiveDistrictEvent, location: ParisLocation): Promise<void> {
+  private async finishLiveEvent(
+    event: ActiveDistrictEvent,
+    location: ParisLocation,
+    slotKey: string,
+  ): Promise<void> {
     console.log(
-      `[ParisLiveEngine] 🏁 Clôture de l'event [${location.postalCode}] : "${event.title}" (eventId: ${event.eventId})`,
+      `[ParisLiveEngine] 🏁 Clôture event [${location.postalCode}#${event.slot}] : "${event.title}" (eventId: ${event.eventId})`,
     );
 
     // 1. Émargement final : avant de clore l'événement, le créateur s'assure que tous les participants sont émargés pour le scoring
@@ -247,7 +273,7 @@ export class ParisLiveEngine {
         }
       }
       console.log(
-        `[ParisLiveEngine] 📋 Émargement final [${location.postalCode}] : Total ${event.checkedInUserIds.size}/${event.participants.length} bénévoles validés présents avant clôture`,
+        `[ParisLiveEngine] 📋 Émargement final [${location.postalCode}#${event.slot}] : Total ${event.checkedInUserIds.size}/${event.participants.length} bénévoles validés présents avant clôture`,
       );
     }
 
@@ -264,27 +290,29 @@ export class ParisLiveEngine {
 
       const finishCode = faker.string.alphanumeric(4).toUpperCase();
       await this.client.createPost(event.organizer.accessToken, {
-        title: `Bilan : ${event.title} (${location.name}) [${finishCode}]`,
+        title: `Bilan : ${event.title} [${finishCode}]`,
         content: `Un immense bravo à tous les bénévoles mobilisés ! ${finishPhotoEntry.caption}. À très vite pour la prochaine édition !`,
         eventId: event.eventId,
         fileIds: finishPhotoFileId ? [finishPhotoFileId] : [],
       });
     }
 
-    // 2. Passage en statut FINISHED (clôture officielle et attribution des scores)
+    // 3. Passage en statut FINISHED (clôture officielle et attribution des scores)
     await this.client.changeEventState(
       event.organizer.accessToken,
       event.eventId,
       'EVENT_STATE_FINISHED',
     );
 
-    // 3. Retirer de la liste active -> au prochain tick, un nouvel event prendra le relais
-    this.activeEvents.delete(location.district);
-    console.log(`[ParisLiveEngine] 🔄 District ${location.district} libéré, prêt pour le prochain cycle.`);
+    // 4. Retirer de la liste active -> au prochain tick, ce slot prendra le relais
+    this.activeEvents.delete(slotKey);
+    const totalTarget = PARIS_DISTRICTS.length * this.eventsPerDistrict;
+    console.log(
+      `[ParisLiveEngine] 🔄 Slot [${location.postalCode}#${event.slot}] libéré (${this.activeEvents.size}/${totalTarget} actifs).`,
+    );
   }
 
   getActiveEventsCount(): number {
     return this.activeEvents.size;
   }
 }
-
