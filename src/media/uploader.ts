@@ -4,10 +4,13 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 export class MediaUploader {
+  private readonly gatewayUrl: string;
   private readonly cacheDir: string;
   private isStorageAvailable = true;
 
-  constructor(private readonly gatewayUrl: string) {
+  constructor(rawGatewayUrl: string) {
+    const trimmed = rawGatewayUrl.replace(/\/+$/, '');
+    this.gatewayUrl = trimmed.endsWith('/api/v1') ? trimmed : `${trimmed}/api/v1`;
     this.cacheDir = join(tmpdir(), 'volontariapp-traffic-simulator-images');
     try {
       if (!existsSync(this.cacheDir)) {

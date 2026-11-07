@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { EventState, EventType } from '@volontariapp/contracts';
 
 export interface UserAuthCredentials {
   id: string;
@@ -10,7 +11,12 @@ export interface UserAuthCredentials {
 }
 
 export class ApiClient {
-  constructor(public readonly baseUrl: string) {}
+  public readonly baseUrl: string;
+
+  constructor(rawBaseUrl: string) {
+    const trimmed = rawBaseUrl.replace(/\/+$/, '');
+    this.baseUrl = trimmed.endsWith('/api/v1') ? trimmed : `${trimmed}/api/v1`;
+  }
 
   private async request<T>(
     endpoint: string,
@@ -98,7 +104,7 @@ export class ApiClient {
       startAt: string;
       endAt: string;
       localisationName: string;
-      type: 'EVENT_TYPE_ECOLOGY' | 'EVENT_TYPE_SOCIAL';
+      type: EventType | 'EVENT_TYPE_ECOLOGY' | 'EVENT_TYPE_SOCIAL';
       maxParticipants: number;
       coverFileId?: string;
     },
@@ -122,7 +128,7 @@ export class ApiClient {
   async changeEventState(
     token: string,
     eventId: string,
-    newState: 'EVENT_STATE_IN_PROGRESS' | 'EVENT_STATE_FINISHED' | 'EVENT_STATE_CANCELLED',
+    newState: EventState | 'EVENT_STATE_IN_PROGRESS' | 'EVENT_STATE_FINISHED' | 'EVENT_STATE_CANCELLED',
   ): Promise<boolean> {
     const res = await this.request(
       `/events/${eventId}/state`,

@@ -21,7 +21,7 @@ export class ActorPool {
       const role = isOrganizer ? 'ORGANIZER' : 'VOLUNTEER';
 
       try {
-        const signupRes = await this.client.signUp({
+        let signupRes = await this.client.signUp({
           email,
           pseudo: pseudo || `volontaire_${i}`,
           password,
@@ -29,6 +29,10 @@ export class ActorPool {
             ? `Responsable d'association solidaire engagé à Paris et en Île-de-France.`
             : `Bénévole motivé pour des actions écologiques, de maraude et de solidarité urbaine.`,
         });
+
+        if (!signupRes.accessToken) {
+          signupRes = await this.client.login({ email, password });
+        }
 
         if (signupRes.user?.id && signupRes.accessToken) {
           const creds: UserAuthCredentials = {

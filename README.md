@@ -17,3 +17,4 @@ Service autonome de simulation de trafic et d'activité en temps réel pour l'é
 yarn install
 API_GATEWAY_URL="http://localhost:3000" TICK_INTERVAL_MS=5000 yarn dev
 ```
+
