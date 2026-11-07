@@ -187,6 +187,56 @@ export class ApiClient {
     return res.ok;
   }
 
+  async setEventAttendance(
+    token: string,
+    eventId: string,
+    checkedUserIds: string[],
+    uncheckedUserIds: string[] = [],
+    silent = false,
+  ): Promise<boolean> {
+    const res = await this.request(
+      `/social/events/${eventId}/attendance`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          checkedUserIds,
+          uncheckedUserIds,
+        }),
+      },
+      token,
+      silent,
+    );
+    return res.ok;
+  }
+
+  async getEventParticipants(
+    token: string,
+    eventId: string,
+    silent = false,
+  ): Promise<string[]> {
+    const res = await this.request<{ ids?: string[] }>(
+      `/social/events/${eventId}/participants`,
+      { method: 'GET' },
+      token,
+      silent,
+    );
+    return res.data?.ids ?? [];
+  }
+
+  async getEventAttendees(
+    token: string,
+    eventId: string,
+    silent = false,
+  ): Promise<Array<{ userId: string; checkedInAt?: string | null }>> {
+    const res = await this.request<{ attendees?: Array<{ userId: string; checkedInAt?: string | null }> }>(
+      `/social/events/${eventId}/attendees`,
+      { method: 'GET' },
+      token,
+      silent,
+    );
+    return res.data?.attendees ?? [];
+  }
+
   async createPost(
     token: string,
     payload: {

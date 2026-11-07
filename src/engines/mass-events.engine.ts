@@ -55,8 +55,13 @@ export class MassEventsEngine {
 
             // Faire participer des bénévoles aux événements futurs
             const participants = this.pool.pickVolunteers(faker.number.int({ min: 2, max: 6 }), organizer.id);
+            const attendeeIds: string[] = [];
             for (const vol of participants) {
-              await this.client.participateEvent(vol.accessToken, eventId, true);
+              const ok = await this.client.participateEvent(vol.accessToken, eventId, true);
+              if (ok) attendeeIds.push(vol.id);
+            }
+            if (attendeeIds.length > 0) {
+              await this.client.setEventAttendance(organizer.accessToken, eventId, attendeeIds, [], true);
             }
           } else {
             // Événement passé historique : marqué directement comme terminé
