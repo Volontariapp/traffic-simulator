@@ -19,6 +19,7 @@ export interface SimulatorConfig {
   initialMassSeed: boolean;
   massEventsCount: number;
   actorBatchPauseMs: number;
+  forceIdentitySync: boolean;
   reaction: ReactionConfig;
   sleep: SleepConfig;
 }
@@ -79,6 +80,7 @@ export function loadConfig(env: Env = process.env): SimulatorConfig {
     initialMassSeed: env.INITIAL_MASS_SEED === 'true',
     massEventsCount: readInt(env, 'MASS_EVENTS_COUNT', 150, 1),
     actorBatchPauseMs: readInt(env, 'ACTOR_BATCH_PAUSE_MS', 1000, 0),
+    forceIdentitySync: readBool(env, 'FORCE_IDENTITY_SYNC', false),
     reaction: {
       scanIntervalMs: readInt(env, 'POST_SCAN_INTERVAL_MS', 4000, 500),
       tickIntervalMs: readInt(env, 'REACTION_TICK_MS', 1000, 100),

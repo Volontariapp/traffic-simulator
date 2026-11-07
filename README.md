@@ -30,8 +30,9 @@ Quand un vrai utilisateur (hors vivier de simulateurs) publie un post, le simula
 | `POST_COMMENTS_MIN` / `POST_COMMENTS_MAX` | `4` / `8` | Fourchette de commentaires par post |
 | `TARGET_ACTORS` | `120` | Taille du vivier (300 en production) |
 | `ACTOR_BATCH_PAUSE_MS` | `1000` | Pause entre deux lots de création ou renommage de comptes |
+| `FORCE_IDENTITY_SYNC` | `false` | Vérifie et corrige les pseudos de tous les comptes au démarrage |
 
-Les pseudos et bios sont générés de façon déterministe (`src/actors/actor-identity.ts`). Les comptes existants sont renommés en place au démarrage (`PATCH /users/me`), l'historique est conservé.
+Les pseudos et bios sont générés de façon déterministe (`src/actors/actor-identity.ts`). Les comptes existants sont renommés en place (`PATCH /users/me`), l'historique est conservé. Pour ne pas réécrire 300 comptes à chaque redéploiement, le simulateur lit d'abord trois comptes sentinelles (premier, milieu, dernier, `GET /users/me`) : s'ils portent déjà leur pseudo cible, la phase est sautée. Sinon, chaque compte est lu et seuls ceux en écart sont écrits. `FORCE_IDENTITY_SYNC=true` force cette vérification complète (un écart isolé hors sentinelles n'est sinon pas détecté).
 
 ## Renouvellement de session sur 401
 
