@@ -33,6 +33,15 @@ Quand un vrai utilisateur (hors vivier de simulateurs) publie un post, le simula
 
 Les pseudos et bios sont générés de façon déterministe (`src/actors/actor-identity.ts`). Les comptes existants sont renommés en place au démarrage (`PATCH /users/me`), l'historique est conservé.
 
+## Renouvellement de session sur 401
+
+Les access tokens expirent. Toute requête authentifiée qui reçoit un 401 (client API et upload de médias) déclenche un renouvellement de la session de l'acteur concerné, puis est rejouée une seule fois avec le nouveau token :
+
+1. `POST /users/refresh` avec le refresh token de l'acteur ;
+2. en secours, re-login avec email et mot de passe (3 tentatives).
+
+Les 401 concurrents d'un même acteur partagent un seul renouvellement réseau. Un second 401 après renouvellement n'est pas rejoué (pas de boucle). Les renouvellements sont journalisés en une ligne agrégée toutes les 10 s.
+
 ## Fenêtre de sommeil
 
 Entre `SLEEP_START_HOUR` et `SLEEP_END_HOUR` (fuseau `SLEEP_TIMEZONE`), le simulateur n'appelle plus l'API : aucun event, aucune réaction. `SLEEP_DRAIN_SEC` avant le début, la création d'events est suspendue ; à l'entrée dans la fenêtre, les events encore actifs sont clôturés. Au réveil, les sessions des acteurs sont rafraîchies. Le pod reste en vie, seul le trafic est coupé.

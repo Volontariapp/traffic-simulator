@@ -2,11 +2,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { fetchWithTokenRetry, type TokenRefresher } from '../auth/token-retry.js';
 
 export class MediaUploader {
   private readonly gatewayUrl: string;
   private readonly cacheDir: string;
   private isStorageAvailable = true;
+  private tokenRefresher?: TokenRefresher;
+
+  /** Renouvellement de session sur 401, partage avec l'ApiClient. */
+  setTokenRefresher(refresher: TokenRefresher): void {
+    this.tokenRefresher = refresher;
+  }
 
   constructor(rawGatewayUrl: string) {
     const trimmed = rawGatewayUrl.replace(/\/+$/, '');
@@ -37,19 +44,24 @@ export class MediaUploader {
       const buffer = await this.getImageBuffer(imageUrl);
 
       // 1. Déclarer le fichier et obtenir l'URL présignée MinIO
-      const uploadUrlRes = await fetch(`${this.gatewayUrl}/storage/upload-url`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          entityType,
-          mimeType: 'image/jpeg',
-          sizeBytes: buffer.length,
-          isPublic: true,
-        }),
-      });
+      const { response: uploadUrlRes, token } = await fetchWithTokenRetry(
+        (bearer) =>
+          fetch(`${this.gatewayUrl}/storage/upload-url`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${bearer}`,
+            },
+            body: JSON.stringify({
+              entityType,
+              mimeType: 'image/jpeg',
+              sizeBytes: buffer.length,
+              isPublic: true,
+            }),
+          }),
+        accessToken,
+        this.tokenRefresher,
+      );
 
       if (!uploadUrlRes.ok) {
         if (uploadUrlRes.status === 503) {
@@ -89,14 +101,16 @@ export class MediaUploader {
       }
 
       // 3. Confirmer l'upload auprès de l'API Gateway
-      const confirmRes = await fetch(
-        `${this.gatewayUrl}/storage/files/${uploadData.fileId}/confirm`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
-        },
+      const { response: confirmRes } = await fetchWithTokenRetry(
+        (bearer) =>
+          fetch(`${this.gatewayUrl}/storage/files/${uploadData.fileId}/confirm`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${bearer}`,
+            },
+          }),
+        token,
+        this.tokenRefresher,
       );
 
       if (!confirmRes.ok) {

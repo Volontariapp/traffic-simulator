@@ -48,6 +48,7 @@ async function bootstrap() {
   const apiClient = new ApiClient(config.apiGatewayUrl);
   const mediaUploader = new MediaUploader(config.apiGatewayUrl);
   const actorPool = new ActorPool(apiClient);
+  mediaUploader.setTokenRefresher((staleToken) => actorPool.renewSession(staleToken));
 
   // Demarre pendant la nuit : on ne touche pas a l'API avant le reveil
   if (getSleepPhase(new Date(), sleep) === 'asleep') {
