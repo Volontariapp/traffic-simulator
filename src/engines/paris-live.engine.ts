@@ -92,8 +92,9 @@ export class ParisLiveEngine {
       organizer.accessToken,
     );
 
+    const uniqueCode = faker.string.alphanumeric(4).toUpperCase();
     const startPostId = await this.client.createPost(organizer.accessToken, {
-      title: `C’est parti pour l’action : ${blueprint.title} !`,
+      title: `C’est parti : ${blueprint.title} (${location.name}) [${uniqueCode}]`,
       content: `L’équipe est en place à ${location.name} ! ${startPhotoEntry.caption}. Rejoignez-nous si vous êtes dans le coin !`,
       eventId,
       fileIds: startPhotoFileId ? [startPhotoFileId] : [],
@@ -101,6 +102,9 @@ export class ParisLiveEngine {
 
     // 4. Passage en statut IN_PROGRESS (Événement en direct !)
     await this.client.changeEventState(organizer.accessToken, eventId, 'EVENT_STATE_IN_PROGRESS');
+
+    // Petite temporisation pour laisser le temps à l'outbox et au post-processor de créer le nœud Neo4j
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // 5. Inscription de bénévoles du pool et likes
     const participants = this.pool.pickVolunteers(faker.number.int({ min: 3, max: 7 }), organizer.id);
@@ -148,8 +152,9 @@ export class ParisLiveEngine {
         event.organizer.accessToken,
       );
 
+      const finishCode = faker.string.alphanumeric(4).toUpperCase();
       await this.client.createPost(event.organizer.accessToken, {
-        title: `Mission accomplie : bilan de notre action à ${location.name} !`,
+        title: `Bilan : ${event.title} (${location.name}) [${finishCode}]`,
         content: `Un immense bravo à tous les bénévoles mobilisés ! ${finishPhotoEntry.caption}. À très vite pour la prochaine édition !`,
         eventId: event.eventId,
         fileIds: finishPhotoFileId ? [finishPhotoFileId] : [],
