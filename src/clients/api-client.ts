@@ -177,11 +177,12 @@ export class ApiClient {
     return res.ok;
   }
 
-  async participateEvent(token: string, eventId: string): Promise<boolean> {
+  async participateEvent(token: string, eventId: string, silent = false): Promise<boolean> {
     const res = await this.request(
       `/social/events/${eventId}/participate`,
       { method: 'POST' },
       token,
+      silent,
     );
     return res.ok;
   }

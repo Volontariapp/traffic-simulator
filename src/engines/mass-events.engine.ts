@@ -49,18 +49,18 @@ export class MassEventsEngine {
         if (eventId) {
           this.createdEventIds.push(eventId);
 
-          // Si événement passé, on peut le marquer comme FINISHED
-          if (!isFuture) {
+          if (isFuture) {
+            // Laisser le temps à l'outbox asynchrone de propager l'event vers Neo4j
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+
+            // Faire participer des bénévoles aux événements futurs
+            const participants = this.pool.pickVolunteers(faker.number.int({ min: 2, max: 6 }), organizer.id);
+            for (const vol of participants) {
+              await this.client.participateEvent(vol.accessToken, eventId, true);
+            }
+          } else {
+            // Événement passé historique : marqué directement comme terminé
             await this.client.changeEventState(organizer.accessToken, eventId, 'EVENT_STATE_FINISHED');
-          }
-
-          // Laisser le temps à l'outbox asynchrone de propager l'event vers Neo4j
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-
-          // Faire participer des bénévoles
-          const participants = this.pool.pickVolunteers(faker.number.int({ min: 2, max: 6 }), organizer.id);
-          for (const vol of participants) {
-            await this.client.participateEvent(vol.accessToken, eventId);
           }
         }
       });
