@@ -158,6 +158,17 @@ export class ApiClient {
     return {};
   }
 
+  /** Lit le pseudo courant de l'utilisateur authentifie (lecture seule, sans evenement). */
+  async getMyPseudo(token: string): Promise<string | undefined> {
+    const res = await this.request<{ user?: { pseudo?: string } }>(
+      '/users/me',
+      { method: 'GET' },
+      token,
+      true,
+    );
+    return res.ok ? res.data?.user?.pseudo : undefined;
+  }
+
   /** Met a jour le profil de l'utilisateur authentifie (pseudo, bio). */
   async updateMe(
     token: string,

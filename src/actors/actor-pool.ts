@@ -4,7 +4,7 @@ import { buildActorIdentities } from './actor-identity.js';
 
 export type PoolApi = Pick<
   ApiClient,
-  'login' | 'signUp' | 'updateMe' | 'refreshSession' | 'setTokenRefresher'
+  'login' | 'signUp' | 'updateMe' | 'getMyPseudo' | 'refreshSession' | 'setTokenRefresher'
 >;
 
 export class ActorPool {
@@ -30,9 +30,16 @@ export class ActorPool {
    * - Login-first : Si le compte existe deja, reutilisation immediate sans recreation.
    * - Identites realistes deterministes (pseudo, bio) : les comptes existants dont le pseudo
    *   differe sont renommes en place (PATCH /users/me), l'historique est conserve.
+   *   Trois comptes sentinelles (premier, milieu, dernier) sont lus d'abord : s'ils portent deja
+   *   leur identite cible, la phase de renommage est sautee (aucune requete par compte).
+   *   `forceIdentitySync` force la verification complete de chaque compte.
    * - Traitement par lots (concurrence de 20), avec une pause apres tout lot qui a ecrit en base.
    */
-  async initialize(targetCount: number = 40, batchPauseMs: number = 0): Promise<void> {
+  async initialize(
+    targetCount: number = 40,
+    batchPauseMs: number = 0,
+    forceIdentitySync: boolean = false,
+  ): Promise<void> {
     console.log(`[ActorPool] Synchronisation des sessions (Cible: ${targetCount} acteurs deterministes)...`);
 
     const CONCURRENCY_LIMIT = 20;
@@ -43,7 +50,7 @@ export class ActorPool {
     const password = 'Password123!Secure';
     let connected = 0;
     let newlyCreated = 0;
-    let renamed = 0;
+    const existingAccounts: Array<{ creds: UserAuthCredentials; bio: string }> = [];
 
     for (let i = 0; i < indices.length; i += CONCURRENCY_LIMIT) {
       const chunk = indices.slice(i, i + CONCURRENCY_LIMIT);
@@ -56,7 +63,6 @@ export class ActorPool {
           // 1. Tenter le login en priorite (silencieux pour ne pas polluer les logs si nouveau)
           let auth = await this.client.login({ email, password }, true);
           let created = false;
-          let wasRenamed = false;
 
           // 2. Si le compte n'existe pas encore en base, le creer avec son identite finale
           if (!auth.accessToken) {
@@ -66,12 +72,9 @@ export class ActorPool {
 
             // En cas de creation concurrente ou demarrage progressif du backend, re-tenter login avec backoff
             for (let retry = 0; retry < 3 && !auth.accessToken; retry++) {
-              if (retry > 0) await new Promise((r) => setTimeout(r, 800));
+              if (retry > 0) await new Promise((r) => setTimeout(r, this.loginRetryDelayMs));
               auth = await this.client.login({ email, password }, true);
             }
-          } else if (auth.user?.pseudo !== pseudo) {
-            // 3. Compte existant avec une ancienne identite : renommage idempotent
-            wasRenamed = await this.client.updateMe(auth.accessToken, { pseudo, bio }, true);
           }
 
           if (auth.user?.id && auth.accessToken) {
@@ -87,7 +90,7 @@ export class ActorPool {
               } satisfies UserAuthCredentials,
               isOrganizer,
               created,
-              wasRenamed,
+              bio,
             };
           }
 
@@ -107,9 +110,12 @@ export class ActorPool {
             this.volunteers.push(res.creds);
           }
           connected++;
-          if (res.created) newlyCreated++;
-          if (res.wasRenamed) renamed++;
-          if (res.created || res.wasRenamed) wroteToDb = true;
+          if (res.created) {
+            newlyCreated++;
+            wroteToDb = true;
+          } else {
+            existingAccounts.push({ creds: res.creds, bio: res.bio });
+          }
         }
       }
 
@@ -122,9 +128,55 @@ export class ActorPool {
       }
     }
 
+    const identity = await this.reconcileIdentities(existingAccounts, batchPauseMs, forceIdentitySync);
+
     console.log(
-      `[ActorPool] Pool pret : ${this.actors.length}/${targetCount} acteurs connectes (${this.organizers.length} organisateurs, ${this.volunteers.length} benevoles, ${newlyCreated} crees, ${renamed} renommes).`,
+      `[ActorPool] Pool pret : ${this.actors.length}/${targetCount} acteurs connectes (${this.organizers.length} organisateurs, ${this.volunteers.length} benevoles, ${newlyCreated} crees, ${identity.renamed} renommes, identites ${identity.skipped ? 'a jour (sentinelles)' : `verifiees (${identity.checked} lectures)`}).`,
     );
+  }
+
+  /**
+   * Aligne pseudo et bio des comptes existants sur leur identite cible. Evite 300 ecritures a chaque
+   * redemarrage : les sentinelles a jour suffisent a sauter la phase. Sinon, lecture par compte et
+   * ecriture uniquement en cas de difference.
+   */
+  private async reconcileIdentities(
+    accounts: Array<{ creds: UserAuthCredentials; bio: string }>,
+    batchPauseMs: number,
+    force: boolean,
+  ): Promise<{ renamed: number; checked: number; skipped: boolean }> {
+    if (accounts.length === 0) return { renamed: 0, checked: 0, skipped: true };
+
+    if (!force) {
+      const sentinels = [
+        ...new Set([accounts[0], accounts[Math.floor(accounts.length / 2)], accounts[accounts.length - 1]]),
+      ];
+      const current = await Promise.all(sentinels.map((a) => this.client.getMyPseudo(a.creds.accessToken)));
+      if (sentinels.every((a, i) => current[i] === a.creds.pseudo)) {
+        return { renamed: 0, checked: sentinels.length, skipped: true };
+      }
+    }
+
+    const CONCURRENCY_LIMIT = 20;
+    let renamed = 0;
+    let checked = 0;
+    for (let i = 0; i < accounts.length; i += CONCURRENCY_LIMIT) {
+      const chunk = accounts.slice(i, i + CONCURRENCY_LIMIT);
+      const outcomes = await Promise.all(
+        chunk.map(async ({ creds, bio }) => {
+          const current = await this.client.getMyPseudo(creds.accessToken);
+          if (current === creds.pseudo) return false;
+          return this.client.updateMe(creds.accessToken, { pseudo: creds.pseudo, bio }, true);
+        }),
+      );
+      checked += chunk.length;
+      const wrote = outcomes.filter(Boolean).length;
+      renamed += wrote;
+      if (wrote > 0 && batchPauseMs > 0 && i + CONCURRENCY_LIMIT < accounts.length) {
+        await new Promise((r) => setTimeout(r, batchPauseMs));
+      }
+    }
+    return { renamed, checked, skipped: false };
   }
 
   /**

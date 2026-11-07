@@ -60,7 +60,7 @@ async function bootstrap() {
   }
 
   // 1. Initialiser le pool d'acteurs virtuels
-  await actorPool.initialize(config.targetActors, config.actorBatchPauseMs);
+  await actorPool.initialize(config.targetActors, config.actorBatchPauseMs, config.forceIdentitySync);
 
   if (actorPool.getAllActors().length === 0) {
     console.error('Echec initialisation : aucun acteur n’a pu etre cree. Verifiez que api-gateway est demarre.');
