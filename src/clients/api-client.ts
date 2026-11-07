@@ -99,9 +99,9 @@ export class ApiClient {
       password: string;
     },
     silent = false,
-  ): Promise<{ user?: { id: string }; accessToken?: string }> {
+  ): Promise<{ user?: { id: string; pseudo?: string }; accessToken?: string }> {
     const res = await this.request<{
-      user?: { id: string };
+      user?: { id: string; pseudo?: string };
       auth: { accessToken: string; refreshToken?: string };
     }>(
       '/users/login',
@@ -120,11 +120,26 @@ export class ApiClient {
         userId = this.extractUserIdFromJwt(accessToken);
       }
       return {
-        user: userId ? { id: userId } : undefined,
+        user: userId ? { id: userId, pseudo: res.data.user?.pseudo } : undefined,
         accessToken,
       };
     }
     return {};
+  }
+
+  /** Met a jour le profil de l'utilisateur authentifie (pseudo, bio). */
+  async updateMe(
+    token: string,
+    patch: { pseudo?: string; bio?: string },
+    silent = false,
+  ): Promise<boolean> {
+    const res = await this.request(
+      '/users/me',
+      { method: 'PATCH', body: JSON.stringify(patch) },
+      token,
+      silent,
+    );
+    return res.ok;
   }
 
   async createEvent(

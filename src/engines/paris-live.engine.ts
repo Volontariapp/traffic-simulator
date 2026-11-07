@@ -25,6 +25,8 @@ interface ActiveDistrictEvent {
 export class ParisLiveEngine {
   // key: `${district}-${slot}` -> ActiveDistrictEvent
   private activeEvents = new Map<string, ActiveDistrictEvent>();
+  // Faux pendant la phase de vidage nocturne : plus aucun nouvel event n'est cree
+  private spawnEnabled = true;
 
   constructor(
     private readonly client: ApiClient,
@@ -57,8 +59,10 @@ export class ParisLiveEngine {
       const current = this.activeEvents.get(slotKey);
 
       if (!current) {
-        // Aucun événement sur ce slot : en démarrer un immédiatement
-        await this.startLiveEventInDistrict(location, slot);
+        // Aucun événement sur ce slot : en démarrer un immédiatement (sauf pendant le vidage nocturne)
+        if (this.spawnEnabled) {
+          await this.startLiveEventInDistrict(location, slot);
+        }
       } else if (now - current.startedAt >= current.durationMs) {
         // L'événement a atteint sa fin artificielle : le clôturer avec bilan et émargement final
         await this.finishLiveEvent(current, location, slotKey);
@@ -314,6 +318,27 @@ export class ParisLiveEngine {
     console.log(
       `[ParisLiveEngine] 🔄 Slot [${location.postalCode}#${event.slot}] libéré (${this.activeEvents.size}/${totalTarget} actifs).`,
     );
+  }
+
+  /** Active ou coupe la creation de nouveaux events (les events en cours se terminent normalement). */
+  setSpawnEnabled(enabled: boolean): void {
+    if (this.spawnEnabled !== enabled) {
+      this.spawnEnabled = enabled;
+      console.log(`[ParisLiveEngine] Creation de nouveaux events ${enabled ? 'reactivee' : 'suspendue'}.`);
+    }
+  }
+
+  /** Cloture immediatement tous les events encore actifs (entree dans la fenetre de sommeil). */
+  async finishAllActive(): Promise<void> {
+    const entries = [...this.activeEvents.entries()];
+    for (let i = 0; i < entries.length; i += this.parallelBatchSize) {
+      await Promise.allSettled(
+        entries.slice(i, i + this.parallelBatchSize).map(([slotKey, event]) => {
+          const location = PARIS_DISTRICTS.find((d) => d.district === event.district) ?? event.location;
+          return this.finishLiveEvent(event, location, slotKey);
+        }),
+      );
+    }
   }
 
   getActiveEventsCount(): number {

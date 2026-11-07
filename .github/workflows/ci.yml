@@ -30,6 +30,12 @@ jobs:
       - name: Install Dependencies
         run: yarn install
 
+      - name: Type-check sources and tests
+        run: yarn typecheck
+
+      - name: Unit tests
+        run: yarn test
+
       - name: Compile TypeScript
         run: yarn build
 
