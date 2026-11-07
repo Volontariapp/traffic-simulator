@@ -1,6 +1,8 @@
 import { fakerFR as faker } from '@faker-js/faker';
 import type { ApiClient } from '../clients/api-client.js';
 import type { ActorPool } from '../actors/actor-pool.js';
+import type { ReactionConfig } from '../config/simulator-config.js';
+import { buildReactionPlan, type PlannedReaction } from './reaction-plan.js';
 
 interface MonitoredCommunityEvent {
   id: string;
@@ -16,82 +18,88 @@ interface MonitoredCommunityPost {
   id: string;
   title: string;
   authorId: string;
-  targetLikes: number;
-  targetComments: number;
-  likedActorIds: Set<string>;
-  commentedActorIds: Set<string>;
-  nextLikeAt: number;
-  nextCommentAt: number;
-  isComplete: boolean;
+  detectedAt: number;
+  /** Reactions restantes, triees par delai croissant depuis la detection. */
+  pending: PlannedReaction[];
+  likes: number;
+  comments: number;
+  total: number;
 }
 
-const SUPPORTIVE_COMMENTS_ECOLOGY = [
-  'Bravo pour cette belle initiative pour notre quartier ! La planète vous remercie 🌱',
-  'Excellente démarche citoyenne ! J’amène des gants et des sacs en renfort !',
-  'Super projet de ramassage, hâte de voir le quartier tout propre !',
-  'Un grand merci pour l’organisation, c’est exactement ce qu’il fallait faire !',
-  'Présent avec grand plaisir ! Superbe énergie collective.',
-  'Bravo à toute l’équipe pour ce chantier éco-citoyen 🌍',
-];
+export type ReactionApi = Pick<
+  ApiClient,
+  'listEvents' | 'listPosts' | 'participateEvent' | 'likePost' | 'createComment'
+>;
 
-const SUPPORTIVE_COMMENTS_SOLIDARITY = [
-  'Magnifique action de solidarité, tout mon soutien aux organisateurs et bénévoles !',
-  'Merci infiniment pour votre engagement au quotidien auprès de ceux qui en ont besoin ❤️',
-  'Comptez sur moi pour donner un coup de main au tri et à la distribution !',
-  'Superbe mobilisation solidaire, un grand bravo à tous !',
-  'Très belle initiative humaine et chaleureuse, merci pour eux.',
-  'Bravo pour ce vestiaire solidaire, je ramène également des vêtements chauds !',
-];
+export type ReactionActors = Pick<
+  ActorPool,
+  'pickOrganizer' | 'getAllActors' | 'getActorById' | 'isSimulatedUser'
+>;
 
-const SUPPORTIVE_COMMENTS_ANIMAL = [
-  'Tellement important de prendre soin de nos petits compagnons de refuge 🐾',
-  'Un immense merci pour cette action auprès des animaux !',
-  'Superbe promenade solidaire, ils ont tellement besoin d’attention et d’affection.',
-  'Bravo pour votre engagement pour la cause animale ❤️',
-];
-
-const SUPPORTIVE_COMMENTS_GENERAL = [
-  'Superbe initiative, bravo pour l’engagement et l’énergie positive !',
-  'Très belle action, ravi de voir la communauté se mobiliser comme ça !',
-  'Bravo ! On a besoin de plus d’actions citoyennes de ce genre.',
-  'Génial, hâte de voir les photos du bilan ! Bon courage à tous.',
-  'Félicitations pour cette organisation au top !',
-];
+/** Un post plus ancien que cela au moment de la detection n'est plus "frais" : pas de reaction. */
+const MAX_POST_AGE_MS = 10 * 60 * 1000;
+const EVENT_SCAN_INTERVAL_MS = 15_000;
+/** Plafond d'appels simultanes vers l'API par tick, pour ne pas saturer la gateway. */
+const MAX_REACTIONS_PER_TICK = 12;
 
 export class UserReactionEngine {
   private monitoredEvents = new Map<string, MonitoredCommunityEvent>();
   private monitoredPosts = new Map<string, MonitoredCommunityPost>();
-  private lastScanAt: number = 0;
-  private readonly scanIntervalMs: number = 15000; // Scanne toutes les 15 secondes
+  private seenPostIds = new Set<string>();
+  private firstPostScanDone = false;
+  private lastEventScanAt = 0;
+  private lastPostScanAt = 0;
 
   constructor(
-    private readonly client: ApiClient,
-    private readonly pool: ActorPool,
+    private readonly client: ReactionApi,
+    private readonly pool: ReactionActors,
+    private readonly config: ReactionConfig,
+    private readonly rng: () => number = Math.random,
   ) {}
 
   /**
-   * Tick de la boucle de réaction aux actions des utilisateurs réels.
-   * Détecte les événements et posts créés par les vrais utilisateurs
-   * et y injecte du dynamisme social (bénévoles, likes, commentaires).
+   * Tick de la boucle de reaction aux actions des utilisateurs reels.
+   * Detecte les evenements et posts crees par de vrais utilisateurs et y injecte
+   * de l'activite sociale (benevoles, likes, commentaires).
    */
   async tick(): Promise<void> {
     const now = Date.now();
+    const scans: Array<Promise<void>> = [];
 
-    // 1. Scan régulier des nouveaux événements et posts de la communauté
-    if (now - this.lastScanAt >= this.scanIntervalMs) {
-      this.lastScanAt = now;
-      await Promise.allSettled([this.scanCommunityEvents(), this.scanCommunityPosts()]);
+    if (now - this.lastPostScanAt >= this.config.scanIntervalMs) {
+      this.lastPostScanAt = now;
+      scans.push(this.scanCommunityPosts(now));
+    }
+    if (now - this.lastEventScanAt >= EVENT_SCAN_INTERVAL_MS) {
+      this.lastEventScanAt = now;
+      scans.push(this.scanCommunityEvents());
+    }
+    if (scans.length > 0) {
+      await Promise.allSettled(scans);
     }
 
-    // 2. Traitement des adhésions progressives aux événements utilisateurs
-    await this.processEventsJoins(now);
-
-    // 3. Traitement des interactions (likes & commentaires) sur les posts utilisateurs
-    await this.processPostsReactions(now);
+    await this.processEventsJoins(Date.now());
+    await this.processPostReactions(Date.now());
   }
 
   /**
-   * Détecte les événements créés par des utilisateurs réels (hors vivier de simulateurs).
+   * Oublie tout l'etat de suivi (entree en sommeil). Au prochain scan, les posts deja
+   * presents sont simplement memorises : aucune rafale de reactions sur du contenu ancien.
+   */
+  reset(): void {
+    this.monitoredEvents.clear();
+    this.monitoredPosts.clear();
+    this.seenPostIds.clear();
+    this.firstPostScanDone = false;
+  }
+
+  /** Nombre de posts en cours de socialisation (utile pour les logs et les tests). */
+  getMonitoredPostCount(): number {
+    return this.monitoredPosts.size;
+  }
+
+  /**
+   * Detecte les evenements crees par des utilisateurs reels (hors vivier de simulateurs).
    */
   private async scanCommunityEvents(): Promise<void> {
     const caller = this.pool.pickOrganizer();
@@ -103,191 +111,176 @@ export class UserReactionEngine {
       for (const ev of events) {
         if (!ev.id || !ev.organizerId) continue;
 
-        // Si l'organisateur N'EST PAS un acteur du simulateur -> c'est un vrai utilisateur !
-        if (!this.pool.isSimulatedUser(ev.organizerId)) {
-          if (!this.monitoredEvents.has(ev.id)) {
-            const targetCount = Math.min(
-              ev.maxParticipants > 0 ? ev.maxParticipants : 15,
-              faker.number.int({ min: 6, max: 12 }),
-            );
+        // Si l'organisateur N'EST PAS un acteur du simulateur -> c'est un vrai utilisateur
+        if (!this.pool.isSimulatedUser(ev.organizerId) && !this.monitoredEvents.has(ev.id)) {
+          const targetCount = Math.min(
+            ev.maxParticipants > 0 ? ev.maxParticipants : 15,
+            faker.number.int({ min: 6, max: 12 }),
+          );
 
-            this.monitoredEvents.set(ev.id, {
-              id: ev.id,
-              title: ev.title,
-              organizerId: ev.organizerId,
-              targetCount,
-              joinedActorIds: new Set<string>(),
-              nextJoinAt: Date.now() + faker.number.int({ min: 3000, max: 8000 }),
-              isComplete: false,
-            });
+          this.monitoredEvents.set(ev.id, {
+            id: ev.id,
+            title: ev.title,
+            organizerId: ev.organizerId,
+            targetCount,
+            joinedActorIds: new Set<string>(),
+            nextJoinAt: Date.now() + faker.number.int({ min: 3000, max: 8000 }),
+            isComplete: false,
+          });
 
-            console.log(
-              `[UserReactionEngine] 🔍 Nouvel événement communautaire détecté : "${ev.title}" (Orga: ${ev.organizerId}). Remplissage automatique programmé (cible: ${targetCount} participants)...`,
-            );
-          }
+          console.log(
+            `[UserReactionEngine] Nouvel evenement communautaire detecte : "${ev.title}" (Orga: ${ev.organizerId}). Remplissage programme (cible: ${targetCount} participants).`,
+          );
         }
       }
-    } catch (err) {
-      // Ignorer les erreurs transitoires de scan
+    } catch {
+      // Erreur transitoire de scan : on reessaie au prochain cycle
     }
   }
 
   /**
-   * Détecte les posts créés par des utilisateurs réels (hors vivier de simulateurs).
+   * Detecte les posts crees par des utilisateurs reels et planifie leurs reactions.
+   * Le premier scan apres un demarrage ne fait que memoriser les posts existants.
    */
-  private async scanCommunityPosts(): Promise<void> {
+  private async scanCommunityPosts(now: number): Promise<void> {
     const caller = this.pool.pickOrganizer();
     if (!caller?.accessToken) return;
 
     try {
       const posts = await this.client.listPosts(caller.accessToken, { limit: 50 }, true);
+      const isFirstScan = !this.firstPostScanDone;
+      const currentIds = new Set<string>();
 
       for (const p of posts) {
         const authorId = p.authorId || p.userId;
         if (!p.id || !authorId) continue;
+        currentIds.add(p.id);
 
-        // Si l'auteur N'EST PAS un acteur du simulateur -> c'est un vrai utilisateur !
-        if (!this.pool.isSimulatedUser(authorId)) {
-          if (!this.monitoredPosts.has(p.id)) {
-            this.monitoredPosts.set(p.id, {
-              id: p.id,
-              title: p.title,
-              authorId,
-              targetLikes: faker.number.int({ min: 5, max: 10 }),
-              targetComments: faker.number.int({ min: 2, max: 4 }),
-              likedActorIds: new Set<string>(),
-              commentedActorIds: new Set<string>(),
-              nextLikeAt: Date.now() + faker.number.int({ min: 2000, max: 6000 }),
-              nextCommentAt: Date.now() + faker.number.int({ min: 5000, max: 15000 }),
-              isComplete: false,
-            });
+        if (this.seenPostIds.has(p.id)) continue;
+        this.seenPostIds.add(p.id);
 
-            console.log(
-              `[UserReactionEngine] 📝 Nouveau post communautaire détecté : "${p.title}" (Auteur: ${authorId}). Réactions programmées (likes & commentaires)...`,
-            );
-          }
-        }
+        if (isFirstScan || this.pool.isSimulatedUser(authorId)) continue;
+
+        const createdAt = p.createdAt ? Date.parse(p.createdAt) : Number.NaN;
+        if (!Number.isNaN(createdAt) && now - createdAt > MAX_POST_AGE_MS) continue;
+
+        const candidateActorIds = this.pool
+          .getAllActors()
+          .filter((a) => a.id !== authorId)
+          .map((a) => a.id);
+        const pending = buildReactionPlan({
+          title: p.title,
+          candidateActorIds,
+          config: this.config,
+          rng: this.rng,
+        });
+        if (pending.length === 0) continue;
+
+        const likes = pending.filter((r) => r.kind === 'like').length;
+        this.monitoredPosts.set(p.id, {
+          id: p.id,
+          title: p.title,
+          authorId,
+          detectedAt: now,
+          pending,
+          likes: 0,
+          comments: 0,
+          total: pending.length,
+        });
+
+        console.log(
+          `[UserReactionEngine] Nouveau post communautaire detecte : "${p.title}" (Auteur: ${authorId}). ${likes} likes et ${pending.length - likes} commentaires planifies.`,
+        );
       }
-    } catch (err) {
-      // Ignorer les erreurs transitoires de scan
+
+      this.firstPostScanDone = true;
+      // Un post sorti de la page courante ne reviendra pas : on borne la memoire
+      for (const id of this.seenPostIds) {
+        if (!currentIds.has(id)) this.seenPostIds.delete(id);
+      }
+    } catch {
+      // Erreur transitoire de scan : on reessaie au prochain cycle
     }
   }
 
   /**
-   * Remplit progressivement les événements des utilisateurs réels avec des bénévoles.
+   * Remplit progressivement les evenements des utilisateurs reels avec des benevoles.
    */
   private async processEventsJoins(now: number): Promise<void> {
-    for (const [eventId, item] of this.monitoredEvents.entries()) {
+    for (const item of this.monitoredEvents.values()) {
       if (item.isComplete) continue;
 
       if (item.joinedActorIds.size >= item.targetCount) {
         item.isComplete = true;
         console.log(
-          `[UserReactionEngine] 🎉 Événement utilisateur "${item.title}" complété avec succès (${item.joinedActorIds.size} bénévoles mobilisés) !`,
+          `[UserReactionEngine] Evenement utilisateur "${item.title}" complete (${item.joinedActorIds.size} benevoles mobilises).`,
         );
         continue;
       }
 
       if (now >= item.nextJoinAt) {
-        // Sélectionne un bénévole qui n'a pas encore rejoint cet événement
-        const availableVolunteers = this.pool.getAllActors().filter(
-          (a) => !item.joinedActorIds.has(a.id) && a.id !== item.organizerId,
-        );
+        const availableVolunteers = this.pool
+          .getAllActors()
+          .filter((a) => !item.joinedActorIds.has(a.id) && a.id !== item.organizerId);
 
         if (availableVolunteers.length > 0) {
           const volunteer = faker.helpers.arrayElement(availableVolunteers);
-          const ok = await this.client.participateEvent(volunteer.accessToken, eventId, true);
+          const ok = await this.client.participateEvent(volunteer.accessToken, item.id, true);
 
           if (ok) {
             item.joinedActorIds.add(volunteer.id);
             console.log(
-              `[UserReactionEngine] 🙋 ${volunteer.pseudo} a rejoint l’événement de l’utilisateur : "${item.title}" (${item.joinedActorIds.size}/${item.targetCount})`,
+              `[UserReactionEngine] ${volunteer.pseudo} a rejoint l'evenement de l'utilisateur : "${item.title}" (${item.joinedActorIds.size}/${item.targetCount})`,
             );
           }
         }
 
-        // Prochaine arrivée échelonnée entre 10 et 25 secondes
+        // Prochaine arrivee echelonnee entre 10 et 25 secondes
         item.nextJoinAt = now + faker.number.int({ min: 10000, max: 25000 });
       }
     }
   }
 
   /**
-   * Ajoute progressivement des likes et des commentaires réalistes aux posts des utilisateurs.
+   * Execute les reactions arrivees a echeance, en parallele et avec un plafond par tick.
    */
-  private async processPostsReactions(now: number): Promise<void> {
-    for (const [postId, item] of this.monitoredPosts.entries()) {
-      if (item.isComplete) continue;
+  private async processPostReactions(now: number): Promise<void> {
+    const due: Array<{ post: MonitoredCommunityPost; reaction: PlannedReaction }> = [];
 
-      // 1. Gestion progressive des likes
-      if (item.likedActorIds.size < item.targetLikes && now >= item.nextLikeAt) {
-        const availableLikers = this.pool.getAllActors().filter(
-          (a) => !item.likedActorIds.has(a.id) && a.id !== item.authorId,
-        );
-
-        if (availableLikers.length > 0) {
-          const liker = faker.helpers.arrayElement(availableLikers);
-          const ok = await this.client.likePost(liker.accessToken, postId);
-          if (ok) {
-            item.likedActorIds.add(liker.id);
-            console.log(
-              `[UserReactionEngine] ❤️ ${liker.pseudo} a liké le post de l’utilisateur : "${item.title}" (${item.likedActorIds.size}/${item.targetLikes} likes)`,
-            );
-          }
-        }
-
-        item.nextLikeAt = now + faker.number.int({ min: 6000, max: 18000 });
+    for (const post of this.monitoredPosts.values()) {
+      while (post.pending.length > 0 && post.detectedAt + post.pending[0].atMs <= now) {
+        if (due.length >= MAX_REACTIONS_PER_TICK) break;
+        due.push({ post, reaction: post.pending.shift() as PlannedReaction });
       }
+      if (due.length >= MAX_REACTIONS_PER_TICK) break;
+    }
 
-      // 2. Gestion progressive des commentaires réalistes et chaleureux
-      if (item.commentedActorIds.size < item.targetComments && now >= item.nextCommentAt) {
-        const availableCommenters = this.pool.getAllActors().filter(
-          (a) => !item.commentedActorIds.has(a.id) && a.id !== item.authorId,
-        );
+    if (due.length === 0) return;
 
-        if (availableCommenters.length > 0) {
-          const commenter = faker.helpers.arrayElement(availableCommenters);
-          const commentText = this.pickSupportiveComment(item.title);
+    await Promise.allSettled(due.map(({ post, reaction }) => this.executeReaction(post, reaction)));
 
-          const ok = await this.client.createComment(commenter.accessToken, postId, commentText, true);
-          if (ok) {
-            item.commentedActorIds.add(commenter.id);
-            console.log(
-              `[UserReactionEngine] 💬 ${commenter.pseudo} a commenté le post "${item.title}" : "${commentText}" (${item.commentedActorIds.size}/${item.targetComments})`,
-            );
-          }
-        }
-
-        item.nextCommentAt = now + faker.number.int({ min: 15000, max: 40000 });
-      }
-
-      // Vérifie si le post a reçu toutes ses interactions
-      if (
-        item.likedActorIds.size >= item.targetLikes &&
-        item.commentedActorIds.size >= item.targetComments
-      ) {
-        item.isComplete = true;
+    for (const [postId, post] of this.monitoredPosts) {
+      if (post.pending.length === 0) {
+        this.monitoredPosts.delete(postId);
         console.log(
-          `[UserReactionEngine] ✨ Post utilisateur "${item.title}" fully socialized (${item.likedActorIds.size} likes, ${item.commentedActorIds.size} commentaires) !`,
+          `[UserReactionEngine] Post utilisateur "${post.title}" socialise (${post.likes} likes, ${post.comments} commentaires sur ${post.total} prevus).`,
         );
       }
     }
   }
 
-  /**
-   * Sélectionne un commentaire pertinent et bienveillant selon la thématique du post.
-   */
-  private pickSupportiveComment(postTitle: string): string {
-    const lower = postTitle.toLowerCase();
-    if (lower.includes('déchet') || lower.includes('clean') || lower.includes('arbre') || lower.includes('vert')) {
-      return faker.helpers.arrayElement(SUPPORTIVE_COMMENTS_ECOLOGY);
+  private async executeReaction(post: MonitoredCommunityPost, reaction: PlannedReaction): Promise<void> {
+    const actor = this.pool.getActorById(reaction.actorId);
+    if (!actor) return;
+
+    if (reaction.kind === 'like') {
+      if (await this.client.likePost(actor.accessToken, post.id)) post.likes++;
+      return;
     }
-    if (lower.includes('maraude') || lower.includes('repas') || lower.includes('vêtement') || lower.includes('don')) {
-      return faker.helpers.arrayElement(SUPPORTIVE_COMMENTS_SOLIDARITY);
+
+    if (reaction.text && (await this.client.createComment(actor.accessToken, post.id, reaction.text, true))) {
+      post.comments++;
+      console.log(`[UserReactionEngine] ${actor.pseudo} a commente "${post.title}" : "${reaction.text}"`);
     }
-    if (lower.includes('chien') || lower.includes('animal') || lower.includes('refuge') || lower.includes('chat')) {
-      return faker.helpers.arrayElement(SUPPORTIVE_COMMENTS_ANIMAL);
-    }
-    return faker.helpers.arrayElement(SUPPORTIVE_COMMENTS_GENERAL);
   }
 }
