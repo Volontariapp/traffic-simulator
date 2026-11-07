@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "yarn@4.12.0",
   "description": "Synthetic Realtime Traffic Generator for Volontariapp (Paris 20 districts invariant, live events & feed spammer)",
   "main": "dist/index.js",
   "scripts": {
