@@ -49,8 +49,9 @@ export class ActorPool {
             });
             created = true;
 
-            // En cas de création concurrente, re-tenter login
-            if (!auth.accessToken) {
+            // En cas de création concurrente ou démarrage progressif du backend, re-tenter login avec backoff
+            for (let retry = 0; retry < 3 && !auth.accessToken; retry++) {
+              if (retry > 0) await new Promise((r) => setTimeout(r, 800));
               auth = await this.client.login({ email, password }, true);
             }
           }
