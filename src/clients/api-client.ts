@@ -141,14 +141,23 @@ export class ApiClient {
     return {};
   }
 
-  /** Echange un refresh token contre une nouvelle paire de tokens (route publique). */
+  /**
+   * Echange un refresh token contre une nouvelle paire de tokens.
+   * La gateway lit le refresh token dans le header Authorization (RefreshTokenMiddleware), le body
+   * ne sert qu'a la commande : les deux sont requis. Pas de `token` ici : un 401 ne doit pas
+   * declencher le renouvellement d'un access token.
+   */
   async refreshSession(
     refreshToken: string,
     silent = true,
   ): Promise<{ accessToken?: string; refreshToken?: string }> {
     const res = await this.request<{ auth?: { accessToken: string; refreshToken?: string } }>(
       '/users/refresh',
-      { method: 'POST', body: JSON.stringify({ refreshToken }) },
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${refreshToken}` },
+        body: JSON.stringify({ refreshToken }),
+      },
       undefined,
       silent,
     );
