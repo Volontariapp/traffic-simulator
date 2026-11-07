@@ -1,0 +1,24 @@
+{
+  "name": "traffic-simulator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic Realtime Traffic Generator for Volontariapp (Paris 20 districts invariant, live events & feed spammer)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "@faker-js/faker": "^10.6.0",
+    "@volontariapp/contracts": "^4.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
+
