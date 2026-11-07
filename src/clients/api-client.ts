@@ -31,6 +31,7 @@ export class ApiClient {
       const res = await fetch(url, { ...options, headers });
       if (!res.ok) {
         const text = await res.text();
+        console.warn(`[ApiClient] ⚠️ ${options.method || 'GET'} ${url} returned ${res.status}: ${text}`);
         return { ok: false, status: res.status, error: text };
       }
       if (res.status === 204) {
@@ -39,7 +40,9 @@ export class ApiClient {
       const data = (await res.json()) as T;
       return { ok: true, status: res.status, data };
     } catch (err) {
-      return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) };
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[ApiClient] 💥 Network/Fetch error on ${options.method || 'GET'} ${url}: ${errMsg}`);
+      return { ok: false, status: 0, error: errMsg };
     }
   }
 
