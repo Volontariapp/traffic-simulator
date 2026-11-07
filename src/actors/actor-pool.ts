@@ -2,12 +2,28 @@ import { fakerFR as faker } from '@faker-js/faker';
 import type { ApiClient, UserAuthCredentials } from '../clients/api-client.js';
 import { buildActorIdentities } from './actor-identity.js';
 
+export type PoolApi = Pick<
+  ApiClient,
+  'login' | 'signUp' | 'updateMe' | 'refreshSession' | 'setTokenRefresher'
+>;
+
 export class ActorPool {
   private actors: UserAuthCredentials[] = [];
   private organizers: UserAuthCredentials[] = [];
   private volunteers: UserAuthCredentials[] = [];
+  /** Tous les access tokens connus (y compris remplaces) -> acteur, pour retrouver l'acteur d'un 401. */
+  private tokenOwners = new Map<string, UserAuthCredentials>();
+  /** Un seul renouvellement a la fois par acteur, les 401 concurrents s'y raccrochent. */
+  private renewals = new Map<string, Promise<string | undefined>>();
+  private renewalStats = { refresh: 0, login: 0, failed: 0 };
+  private renewalLogTimer?: ReturnType<typeof setTimeout>;
 
-  constructor(private readonly client: ApiClient) {}
+  constructor(
+    private readonly client: PoolApi,
+    private readonly loginRetryDelayMs: number = 800,
+  ) {
+    this.client.setTokenRefresher((staleToken) => this.renewSession(staleToken));
+  }
 
   /**
    * Initialise ou reconnecte le pool d'acteurs de maniere deterministe et parallelisee.
@@ -46,7 +62,7 @@ export class ActorPool {
           if (!auth.accessToken) {
             const signed = await this.client.signUp({ email, pseudo, password, bio });
             created = true;
-            auth = { user: signed.user, accessToken: signed.accessToken };
+            auth = { user: signed.user, accessToken: signed.accessToken, refreshToken: signed.refreshToken };
 
             // En cas de creation concurrente ou demarrage progressif du backend, re-tenter login avec backoff
             for (let retry = 0; retry < 3 && !auth.accessToken; retry++) {
@@ -66,6 +82,7 @@ export class ActorPool {
                 pseudo,
                 password,
                 accessToken: auth.accessToken,
+                refreshToken: auth.refreshToken,
                 role,
               } satisfies UserAuthCredentials,
               isOrganizer,
@@ -83,6 +100,7 @@ export class ActorPool {
       for (const res of results) {
         if (res) {
           this.actors.push(res.creds);
+          this.tokenOwners.set(res.creds.accessToken, res.creds);
           if (res.isOrganizer) {
             this.organizers.push(res.creds);
           } else {
@@ -126,16 +144,91 @@ export class ActorPool {
   }
 
   /**
-   * Renouvelle le token JWT d'un acteur en cas d'expiration au long cours.
+   * Re-login d'un acteur (reveil apres la fenetre de sommeil).
    */
   async refreshActorToken(actor: UserAuthCredentials): Promise<boolean> {
     if (!actor.password) return false;
     const res = await this.client.login({ email: actor.email, password: actor.password }, true);
     if (res.accessToken) {
-      actor.accessToken = res.accessToken;
+      this.applySession(actor, res.accessToken, res.refreshToken);
       return true;
     }
     return false;
+  }
+
+  /**
+   * Renouvelle la session de l'acteur dont le token vient de recevoir un 401.
+   * Basculement : refresh token d'abord, puis re-login avec le mot de passe.
+   * Retourne le nouvel access token, ou undefined si les deux voies echouent.
+   * Appels concurrents pour un meme acteur : un seul renouvellement reseau.
+   */
+  async renewSession(staleToken: string): Promise<string | undefined> {
+    const actor = this.tokenOwners.get(staleToken);
+    if (!actor) return undefined;
+
+    // Deja renouvele par un autre appel entre-temps : rien a faire
+    if (actor.accessToken !== staleToken) return actor.accessToken;
+
+    const inFlight = this.renewals.get(actor.id);
+    if (inFlight) return inFlight;
+
+    const renewal = this.performRenewal(actor).finally(() => this.renewals.delete(actor.id));
+    this.renewals.set(actor.id, renewal);
+    return renewal;
+  }
+
+  private async performRenewal(actor: UserAuthCredentials): Promise<string | undefined> {
+    // 1. Refresh token (leger, pas de hachage de mot de passe cote serveur)
+    if (actor.refreshToken) {
+      const refreshed = await this.client.refreshSession(actor.refreshToken);
+      if (refreshed.accessToken) {
+        this.applySession(actor, refreshed.accessToken, refreshed.refreshToken);
+        this.noteRenewal('refresh');
+        return refreshed.accessToken;
+      }
+    }
+
+    // 2. Secours : re-login complet
+    if (actor.password) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, this.loginRetryDelayMs));
+        const res = await this.client.login({ email: actor.email, password: actor.password }, true);
+        if (res.accessToken) {
+          this.applySession(actor, res.accessToken, res.refreshToken);
+          this.noteRenewal('login');
+          return res.accessToken;
+        }
+      }
+    }
+
+    this.noteRenewal('failed');
+    return undefined;
+  }
+
+  private applySession(actor: UserAuthCredentials, accessToken: string, refreshToken?: string): void {
+    actor.accessToken = accessToken;
+    if (refreshToken) actor.refreshToken = refreshToken;
+    this.tokenOwners.set(accessToken, actor);
+
+    // Les anciens tokens restent resolvables (401 en vol), mais on borne la memoire
+    if (this.tokenOwners.size > this.actors.length * 4 + 16) {
+      this.tokenOwners = new Map(this.actors.map((a) => [a.accessToken, a]));
+    }
+  }
+
+  /** Resume agrege des renouvellements : une ligne par fenetre de 10 s, pas une par acteur. */
+  private noteRenewal(kind: 'refresh' | 'login' | 'failed'): void {
+    this.renewalStats[kind]++;
+    if (this.renewalLogTimer) return;
+    this.renewalLogTimer = setTimeout(() => {
+      const { refresh, login, failed } = this.renewalStats;
+      console.log(
+        `[ActorPool] Sessions renouvelees apres 401 : ${refresh} par refresh token, ${login} par re-login, ${failed} echecs.`,
+      );
+      this.renewalStats = { refresh: 0, login: 0, failed: 0 };
+      this.renewalLogTimer = undefined;
+    }, 10_000);
+    this.renewalLogTimer.unref();
   }
 
   pickOrganizer(): UserAuthCredentials {

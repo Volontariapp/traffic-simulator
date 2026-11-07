@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { fetchWithTokenRetry, type TokenRefresher } from '../auth/token-retry.js';
 import { EventState, EventType } from '@volontariapp/contracts';
 
 export interface UserAuthCredentials {
@@ -13,6 +14,12 @@ export interface UserAuthCredentials {
 
 export class ApiClient {
   public readonly baseUrl: string;
+  private tokenRefresher?: TokenRefresher;
+
+  /** Branche le renouvellement de session : appele sur toute reponse 401 d'une requete authentifiee. */
+  setTokenRefresher(refresher: TokenRefresher): void {
+    this.tokenRefresher = refresher;
+  }
 
   constructor(rawBaseUrl: string) {
     const trimmed = rawBaseUrl.replace(/\/+$/, '');
@@ -26,17 +33,22 @@ export class ApiClient {
     silent = false,
   ): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
     const url = `${this.baseUrl}${endpoint}`;
-    const headers: Record<string, string> = {
+    const buildHeaders = (bearer?: string): Record<string, string> => ({
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),
-    };
-
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+    });
 
     try {
-      const res = await fetch(url, { ...options, headers });
+      const res = token
+        ? (
+            await fetchWithTokenRetry(
+              (bearer) => fetch(url, { ...options, headers: buildHeaders(bearer) }),
+              token,
+              this.tokenRefresher,
+            )
+          ).response
+        : await fetch(url, { ...options, headers: buildHeaders() });
       if (!res.ok) {
         const text = await res.text();
         if (!silent) {
@@ -63,7 +75,7 @@ export class ApiClient {
     pseudo: string;
     password: string;
     bio?: string;
-  }): Promise<{ user?: { id: string }; accessToken?: string }> {
+  }): Promise<{ user?: { id: string }; accessToken?: string; refreshToken?: string }> {
     const res = await this.request<{
       user: { id: string };
       auth: { accessToken: string; refreshToken?: string };
@@ -76,6 +88,7 @@ export class ApiClient {
       return {
         user: res.data.user,
         accessToken: res.data.auth?.accessToken,
+        refreshToken: res.data.auth?.refreshToken,
       };
     }
     return {};
@@ -99,7 +112,7 @@ export class ApiClient {
       password: string;
     },
     silent = false,
-  ): Promise<{ user?: { id: string; pseudo?: string }; accessToken?: string }> {
+  ): Promise<{ user?: { id: string; pseudo?: string }; accessToken?: string; refreshToken?: string }> {
     const res = await this.request<{
       user?: { id: string; pseudo?: string };
       auth: { accessToken: string; refreshToken?: string };
@@ -122,7 +135,25 @@ export class ApiClient {
       return {
         user: userId ? { id: userId, pseudo: res.data.user?.pseudo } : undefined,
         accessToken,
+        refreshToken: res.data.auth?.refreshToken,
       };
+    }
+    return {};
+  }
+
+  /** Echange un refresh token contre une nouvelle paire de tokens (route publique). */
+  async refreshSession(
+    refreshToken: string,
+    silent = true,
+  ): Promise<{ accessToken?: string; refreshToken?: string }> {
+    const res = await this.request<{ auth?: { accessToken: string; refreshToken?: string } }>(
+      '/users/refresh',
+      { method: 'POST', body: JSON.stringify({ refreshToken }) },
+      undefined,
+      silent,
+    );
+    if (res.ok && res.data?.auth?.accessToken) {
+      return { accessToken: res.data.auth.accessToken, refreshToken: res.data.auth.refreshToken };
     }
     return {};
   }
