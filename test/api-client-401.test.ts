@@ -43,6 +43,32 @@ describe('ApiClient sur 401', () => {
     assert.equal(refresher.mock.callCount(), 0);
   });
 
+  it('refreshSession envoie le refresh token en header Authorization ET dans le body', async () => {
+    let captured: RequestInit | undefined;
+    mock.method(globalThis, 'fetch', async (_url: string | URL | Request, init?: RequestInit) => {
+      captured = init;
+      return new Response(JSON.stringify({ auth: { accessToken: 'a2', refreshToken: 'r2' } }), { status: 200 });
+    });
+    const client = new ApiClient('http://gw');
+    const refresher = mock.fn(async () => 'never');
+    client.setTokenRefresher(refresher);
+
+    await client.refreshSession('r1');
+
+    assert.equal(authOf(captured), 'Bearer r1');
+    assert.deepEqual(JSON.parse(String(captured?.body)), { refreshToken: 'r1' });
+    assert.equal(refresher.mock.callCount(), 0);
+  });
+
+  it('refreshSession echoue proprement sur un 401 sans relancer de renouvellement', async () => {
+    mock.method(globalThis, 'fetch', async () => new Response('invalid', { status: 401 }));
+    const client = new ApiClient('http://gw');
+    const refresher = mock.fn(async () => 'never');
+    client.setTokenRefresher(refresher);
+    assert.deepEqual(await client.refreshSession('bad'), {});
+    assert.equal(refresher.mock.callCount(), 0);
+  });
+
   it('refreshSession lit la nouvelle paire de tokens', async () => {
     mock.method(
       globalThis,
