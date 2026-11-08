@@ -158,6 +158,6 @@ Coupez d'abord l'activite de fond du simulateur (`AMBIENT_ACTIONS_PER_SEC=0` ou 
 | `LOAD_STEPS` | `50,100,200,400,800,1000` | Debits cibles en req/s |
 | `LOAD_STEP_SECONDS` / `LOAD_WARMUP_SECONDS` | `60` / `10` | Duree de mesure et echauffement par palier |
 | `LOAD_ACTORS` | `200` | Comptes existants utilises (memes identites que le pool principal, aucun renommage) |
-| `LOAD_MIX` | `events-list:40,posts-list:30,me:20,is-following:10` | Routes et poids |
+| `LOAD_MIX` | `events-list:40,posts-list:30,me:20,is-following:10` | Routes et poids. Routes : `events-list`, `events-list-app`, `posts-list`, `me`, `is-following`. `events-list-app` ajoute les filtres de nativapp (`excludeBlockedUsers`, `excludeParticipatedByMe`, `excludeCreatedByMe`, `excludeWishedByMe`), qui coutent des appels pagines a ms-social : l'utiliser a la place de `events-list` pour une mesure fidele a l'application |
 | `LOAD_TIMEOUT_MS` | `10000` | Delai par requete |
 | `LOAD_REPORT_PATH` | `load-report.json` | Rapport JSON, tableau affiche en fin de run |

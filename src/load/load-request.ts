@@ -6,6 +6,19 @@ export interface LoadTarget {
   path: string;
 }
 
+/**
+ * Union des filtres de use-swipe-screen.ts et use-nearest-live-events.ts (nativapp) : le cas le
+ * plus couteux pour la gateway, qui relit ces listes dans ms-social a chaque requete.
+ */
+const APP_EVENT_FILTERS = [
+  'excludeBlockedUsers',
+  'excludeParticipatedByMe',
+  'excludeCreatedByMe',
+  'excludeWishedByMe',
+]
+  .map((flag) => `${flag}=true`)
+  .join('&');
+
 /** Tirage pondere. `rng` retourne un nombre dans [0, 1). */
 export function pickRoute(mix: readonly RouteWeight[], rng: () => number): LoadRouteName {
   const total = mix.reduce((sum, entry) => sum + entry.weight, 0);
@@ -26,6 +39,8 @@ export function buildTarget(route: LoadRouteName, peerUserId: string, rng: () =>
   switch (route) {
     case 'events-list':
       return { route, path: `/events?page=${page}&limit=20` };
+    case 'events-list-app':
+      return { route, path: `/events?page=${page}&limit=20&${APP_EVENT_FILTERS}` };
     case 'posts-list':
       return { route, path: `/posts?page=${page}&limit=20` };
     case 'me':

@@ -1,4 +1,14 @@
-export const LOAD_ROUTES = ['events-list', 'posts-list', 'me', 'is-following'] as const;
+/**
+ * `events-list-app` reprend les filtres que nativapp envoie (exclusions personnelles et
+ * utilisateurs bloques) : chacun coute des appels pagines a ms-social avant la recherche.
+ */
+export const LOAD_ROUTES = [
+  'events-list',
+  'events-list-app',
+  'posts-list',
+  'me',
+  'is-following',
+] as const;
 export type LoadRouteName = (typeof LOAD_ROUTES)[number];
 
 export interface RouteWeight {
