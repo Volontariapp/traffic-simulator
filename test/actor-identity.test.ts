@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildActorIdentities } from '../src/actors/actor-identity.js';
+import {
+  LOCAL_SEED_OFFSET,
+  buildActorIdentities,
+  localEmailForIndex,
+  reservedMainPseudos,
+} from '../src/actors/actor-identity.js';
 
 const roleOf = (i: number) => (i < 5 ? 'ORGANIZER' : 'VOLUNTEER');
 
@@ -41,3 +46,40 @@ describe('buildActorIdentities', () => {
     assert.ok(identities.slice(5).some((i) => !organizerBios.has(i.bio)));
   });
 });
+
+describe('identites des acteurs locaux', () => {
+  const options = {
+    emailFor: localEmailForIndex,
+    seedOffset: LOCAL_SEED_OFFSET,
+    reservedPseudos: reservedMainPseudos(),
+    localBios: true,
+  };
+  const locals = buildActorIdentities(60, roleOf, options);
+
+  it('ne partage ni email ni pseudo avec le pool principal', () => {
+    const main = buildActorIdentities(1000, roleOf);
+    const mainEmails = new Set(main.map((i) => i.email));
+    const mainPseudos = new Set(main.map((i) => i.pseudo));
+    for (const { email, pseudo } of locals) {
+      assert.ok(!mainEmails.has(email), email);
+      assert.ok(!mainPseudos.has(pseudo), pseudo);
+    }
+    assert.equal(new Set(locals.map((i) => i.pseudo)).size, 60);
+    assert.equal(locals[0].email, 'local.0001@simulator.volontariapp.test');
+  });
+
+  it('n evoque aucun arrondissement dans les bios', () => {
+    for (const { bio } of locals) {
+      assert.doesNotMatch(bio, /\{district\}|Paris|\d+e\b/);
+    }
+  });
+
+  it('est deterministe', () => {
+    assert.deepEqual(buildActorIdentities(60, roleOf, options), locals);
+  });
+
+  it('laisse le pool principal inchange par defaut', () => {
+    assert.equal(buildActorIdentities(3, roleOf)[0].email, 'actor.0001@simulator.volontariapp.test');
+  });
+});
+

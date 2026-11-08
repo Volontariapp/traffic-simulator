@@ -9,6 +9,9 @@ export interface ParisLocation {
   lng: number;
 }
 
+/** Valeur de `district` pour un lieu hors des 20 arrondissements (events autour d'un utilisateur). */
+export const OFF_GRID_DISTRICT = 0;
+
 interface VenueSeed {
   name: string;
   address: string;

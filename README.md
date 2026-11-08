@@ -50,6 +50,30 @@ En prévention, le simulateur vérifie le claim `exp` des access tokens toutes l
 | `TOKEN_REFRESH_AHEAD_SEC` | `300` | Renouvelle un token expirant dans moins de ce délai |
 | `TOKEN_CHECK_INTERVAL_SEC` | `60` | Fréquence de vérification des expirations |
 
+## Events autour d'un utilisateur
+
+Pour qu'un utilisateur reel voie de l'activite pres de lui, quel que soit l'endroit, le simulateur peut creer des events en direct dans un rayon autour d'un ou plusieurs centres (par exemple la position de test d'un telephone). Desactive tant que `LOCAL_CENTERS` est vide. Les events parisiens et le pool principal ne changent pas.
+
+Le simulateur ne lit pas la position des utilisateurs : `ms-ranking` la stocke arrondie a 1 km et chiffree, sans route de lecture. Les centres se declarent donc par variable d'environnement.
+
+- Toutes les `LOCAL_EVENTS_INTERVAL_SEC` secondes (5 min), une vague de `LOCAL_EVENTS_MIN` a `LOCAL_EVENTS_MAX` events par centre.
+- Chaque event est pose sur un point tire uniformement dans le rayon. Le point est converti en adresse reelle (reverse-geocodage OpenStreetMap Nominatim, 1 requete par seconde au plus) : `post-processor-event` geocode ensuite cette adresse et pose les coordonnees. Si le point n'a pas d'adresse, 3 points sont essayes avant d'abandonner l'event.
+- Meme cycle de vie que les events parisiens (cover, post d'ouverture, participants, emargement, bilan, cloture), avec une duree de `LOCAL_EVENT_LIFESPAN_SEC`.
+- Les organisateurs et participants sont un pool distinct de `LOCAL_ACTORS` comptes (`local.NNNN@simulator.volontariapp.test`), avec des pseudos et bios sans arrondissement. Leurs posts ne declenchent aucune reaction automatique.
+- La fenetre de sommeil s'applique : plus de vague pendant le vidage, events clotures a l'entree dans la fenetre.
+
+| Variable | Defaut | Role |
+| :--- | :--- | :--- |
+| `LOCAL_CENTERS` | vide | Centres `lat,lng;lat,lng` (vide : fonction desactivee) |
+| `LOCAL_ACTORS` | `40` | Comptes "gens du coin", en plus de `TARGET_ACTORS` |
+| `LOCAL_RADIUS_METERS` | `2000` | Rayon autour de chaque centre |
+| `LOCAL_EVENTS_INTERVAL_SEC` | `300` | Delai entre deux vagues |
+| `LOCAL_EVENTS_MIN` / `LOCAL_EVENTS_MAX` | `1` / `2` | Events par vague et par centre |
+| `LOCAL_EVENT_LIFESPAN_SEC` | `900` | Duree d'un event en direct |
+| `LOCAL_GEOCODER_USER_AGENT` | `VolontariApp-TrafficSimulator/1.0` | User-Agent envoye a Nominatim |
+
+Exemple : `LOCAL_CENTERS="48.8566,2.3522" yarn dev`. En local (`NODE_ENV=local`), `post-processor-event` saute le geocodage : les events n'ont alors pas de coordonnees.
+
 ## Fenêtre de sommeil
 
 Entre `SLEEP_START_HOUR` et `SLEEP_END_HOUR` (fuseau `SLEEP_TIMEZONE`), le simulateur n'appelle plus l'API : aucun event, aucune réaction. `SLEEP_DRAIN_SEC` avant le début, la création d'events est suspendue ; à l'entrée dans la fenêtre, les events encore actifs sont clôturés. Au réveil, les sessions des acteurs sont rafraîchies. Le pod reste en vie, seul le trafic est coupé.

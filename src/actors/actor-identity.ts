@@ -58,6 +58,38 @@ const VOLUNTEER_BIOS = [
   'Disponible en soirée et le dimanche.',
 ];
 
+/** Bios des gens du coin : aucun arrondissement, ils vivent la ou se trouve l'utilisateur. */
+const LOCAL_ORGANIZER_BIOS = [
+  'Je monte des petites actions solidaires dans mon quartier, venez nombreux.',
+  'Engagé dans la vie associative locale depuis plusieurs années.',
+  'Organisation de collectes et de chantiers entre voisins.',
+  'Passionné par les projets de quartier. Toujours partant pour une nouvelle idée.',
+  'Je fédère les voisins autour d’actions utiles près de chez nous.',
+  'Bénévole depuis longtemps, organisateur par plaisir.',
+];
+
+const LOCAL_VOLUNTEER_BIOS = [
+  'Habitant du quartier, partant pour donner un coup de main.',
+  'J’aime me rendre utile près de chez moi.',
+  'Nouveau dans le coin, je découvre le bénévolat local.',
+  'Je participe quand mon planning le permet.',
+  'Voisin curieux et motivé.',
+  'Fan des actions de quartier et de bonne humeur.',
+  'Disponible en soirée et le week-end.',
+  'Là pour rencontrer du monde autour de moi.',
+];
+
+export interface IdentityOptions {
+  /** Email de l'acteur d'index i (defaut : `emailForIndex`). */
+  emailFor?: (index: number) => string;
+  /** Decale la graine du PRNG pour obtenir d'autres pseudos que le pool principal. */
+  seedOffset?: number;
+  /** Pseudos deja pris (autre pool) : une collision recoit un suffixe numerique. */
+  reservedPseudos?: ReadonlySet<string>;
+  /** Bios sans arrondissement parisien. */
+  localBios?: boolean;
+}
+
 /** PRNG deterministe (mulberry32), independant du faker global. */
 export function createRng(seed: number): () => number {
   let state = seed >>> 0;
@@ -114,12 +146,15 @@ export function emailForIndex(index: number): string {
 export function buildActorIdentities(
   count: number,
   roleOf: (index: number) => ActorRole,
+  options: IdentityOptions = {},
 ): ActorIdentity[] {
-  const seen = new Set<string>();
+  const emailFor = options.emailFor ?? emailForIndex;
+  const seedOffset = options.seedOffset ?? 0;
+  const seen = new Set<string>(options.reservedPseudos);
   const identities: ActorIdentity[] = [];
 
   for (let index = 0; index < count; index++) {
-    const rng = createRng(0x9e3779b1 ^ (index * 2654435761));
+    const rng = createRng(0x9e3779b1 ^ ((index + seedOffset) * 2654435761));
     let pseudo = ascii(buildPseudo(rng));
     if (seen.has(pseudo)) {
       let suffix = 2;
@@ -129,11 +164,31 @@ export function buildActorIdentities(
     seen.add(pseudo);
 
     const district = 1 + Math.floor(rng() * 20);
-    const bios = roleOf(index) === 'ORGANIZER' ? ORGANIZER_BIOS : VOLUNTEER_BIOS;
+    const isOrganizer = roleOf(index) === 'ORGANIZER';
+    const bios = options.localBios
+      ? isOrganizer
+        ? LOCAL_ORGANIZER_BIOS
+        : LOCAL_VOLUNTEER_BIOS
+      : isOrganizer
+        ? ORGANIZER_BIOS
+        : VOLUNTEER_BIOS;
     const bio = pick(rng, bios).replace('{district}', String(district));
 
-    identities.push({ email: emailForIndex(index), pseudo, bio });
+    identities.push({ email: emailFor(index), pseudo, bio });
   }
 
   return identities;
+}
+
+/** Email des acteurs locaux, distinct de `emailForIndex` pour ne jamais melanger les deux pools. */
+export function localEmailForIndex(index: number): string {
+  return `local.${String(index + 1).padStart(4, '0')}@simulator.volontariapp.test`;
+}
+
+/** Decalage de graine des acteurs locaux : au-dela de toute taille realiste du pool principal. */
+export const LOCAL_SEED_OFFSET = 100_000;
+
+/** Pseudos que le pool principal peut prendre (jusqu'a 1000 acteurs), a ecarter pour les locaux. */
+export function reservedMainPseudos(): Set<string> {
+  return new Set(buildActorIdentities(1000, () => 'VOLUNTEER').map((identity) => identity.pseudo));
 }
