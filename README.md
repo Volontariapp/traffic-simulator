@@ -43,6 +43,13 @@ Les access tokens expirent. Toute requête authentifiée qui reçoit un 401 (cli
 
 Les 401 concurrents d'un même acteur partagent un seul renouvellement réseau. Un second 401 après renouvellement n'est pas rejoué (pas de boucle). Les renouvellements sont journalisés en une ligne agrégée toutes les 10 s.
 
+En prévention, le simulateur vérifie le claim `exp` des access tokens toutes les `TOKEN_CHECK_INTERVAL_SEC` secondes et renouvelle ceux qui expirent dans moins de `TOKEN_REFRESH_AHEAD_SEC`. Les 401 n'apparaissent donc qu'en cas d'échec de ce renouvellement préventif. Pendant la fenêtre de sommeil, cette vérification est suspendue.
+
+| Variable | Défaut | Rôle |
+| :--- | :--- | :--- |
+| `TOKEN_REFRESH_AHEAD_SEC` | `300` | Renouvelle un token expirant dans moins de ce délai |
+| `TOKEN_CHECK_INTERVAL_SEC` | `60` | Fréquence de vérification des expirations |
+
 ## Fenêtre de sommeil
 
 Entre `SLEEP_START_HOUR` et `SLEEP_END_HOUR` (fuseau `SLEEP_TIMEZONE`), le simulateur n'appelle plus l'API : aucun event, aucune réaction. `SLEEP_DRAIN_SEC` avant le début, la création d'events est suspendue ; à l'entrée dans la fenêtre, les events encore actifs sont clôturés. Au réveil, les sessions des acteurs sont rafraîchies. Le pod reste en vie, seul le trafic est coupé.

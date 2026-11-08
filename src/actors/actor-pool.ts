@@ -1,5 +1,6 @@
 import { fakerFR as faker } from '@faker-js/faker';
 import type { ApiClient, UserAuthCredentials } from '../clients/api-client.js';
+import { isExpiringWithin } from '../auth/token-expiry.js';
 import { buildActorIdentities } from './actor-identity.js';
 
 export type PoolApi = Pick<
@@ -221,6 +222,42 @@ export class ActorPool {
     // Deja renouvele par un autre appel entre-temps : rien a faire
     if (actor.accessToken !== staleToken) return actor.accessToken;
 
+    return this.renewActor(actor);
+  }
+
+  /**
+   * Demarre les renouvellements preventifs : toutes les `intervalMs`, renouvelle les sessions dont
+   * l'access token expire dans moins de `marginMs`. Evite d'envoyer des tokens expires aux services
+   * (401 en rafale dans les logs). `canRun` permet de suspendre le renouvellement (fenetre de sommeil).
+   */
+  startTokenKeepAlive(options: { intervalMs: number; marginMs: number; canRun: () => boolean }): void {
+    const timer = setInterval(() => {
+      if (!options.canRun()) return;
+      this.refreshExpiringSessions(options.marginMs).catch((err: unknown) =>
+        console.error('[ActorPool] Renouvellement preventif en echec :', err instanceof Error ? err.message : String(err)),
+      );
+    }, options.intervalMs);
+    timer.unref();
+  }
+
+  /**
+   * Renouvelle les sessions dont l'access token expire dans moins de `marginMs` (ou est deja expire).
+   * Retourne le nombre de sessions renouvelees avec succes.
+   */
+  async refreshExpiringSessions(marginMs: number, now: number = Date.now()): Promise<number> {
+    const CONCURRENCY_LIMIT = 20;
+    const due = this.actors.filter((actor) => isExpiringWithin(actor.accessToken, marginMs, now));
+    let renewed = 0;
+    for (let i = 0; i < due.length; i += CONCURRENCY_LIMIT) {
+      const chunk = due.slice(i, i + CONCURRENCY_LIMIT);
+      const results = await Promise.all(chunk.map((actor) => this.renewActor(actor)));
+      renewed += results.filter((token) => token !== undefined).length;
+    }
+    return renewed;
+  }
+
+  /** Un seul renouvellement reseau en vol par acteur : les appels concurrents partagent la meme promesse. */
+  private renewActor(actor: UserAuthCredentials): Promise<string | undefined> {
     const inFlight = this.renewals.get(actor.id);
     if (inFlight) return inFlight;
 
@@ -275,7 +312,7 @@ export class ActorPool {
     this.renewalLogTimer = setTimeout(() => {
       const { refresh, login, failed } = this.renewalStats;
       console.log(
-        `[ActorPool] Sessions renouvelees apres 401 : ${refresh} par refresh token, ${login} par re-login, ${failed} echecs.`,
+        `[ActorPool] Sessions renouvelees : ${refresh} par refresh token, ${login} par re-login, ${failed} echecs.`,
       );
       this.renewalStats = { refresh: 0, login: 0, failed: 0 };
       this.renewalLogTimer = undefined;
