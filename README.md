@@ -133,3 +133,31 @@ Entre `SLEEP_START_HOUR` et `SLEEP_END_HOUR` (fuseau `SLEEP_TIMEZONE`), le simul
 yarn typecheck
 yarn test
 ```
+
+## Rampe de charge (lecture seule)
+
+Outil separe du simulateur d'activite : il cherche la limite du projet en montant le debit par paliers.
+Il se lance depuis une machine hors du cluster (sinon la charge consomme la RAM de l'hote mesure) et ne fait que des lectures.
+
+```bash
+LOAD_BASE_URL="https://<gateway>" LOAD_STEPS="50,100,200" yarn load
+```
+
+Coupez d'abord l'activite de fond du simulateur (`AMBIENT_ACTIONS_PER_SEC=0` ou deploiement a 0 replica) : elle s'ajoute au debit mesure.
+
+- Boucle ouverte : le debit est tenu par l'horloge, il ne baisse pas quand le serveur ralentit. Les requetes en vol sont plafonnees (`LOAD_MAX_IN_FLIGHT`), au-dela elles sont comptees `dropped` et comptent comme erreurs.
+- Arret automatique : `LOAD_ABORT_WINDOWS` fenetres consecutives (de `LOAD_WINDOW_SECONDS`) avec des erreurs (5xx, reseau, delai, dropped) ou des 429 au-dessus de `LOAD_ABORT_ERROR_RATE`, ou un p95 au-dessus de `LOAD_ABORT_P95_MS`. Un 429 soutenu arrete aussi la rampe : un rate limit repond vite, sans lui le palier paraitrait sain alors que la mesure n'est plus celle de l'application. Les 206 (fallback gateway) sont comptees a part.
+- Gateway publique derriere Cloudflare Access : exporter les memes variables que `nativapp/.env` (`CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`, renseignees ensemble). Elles sont envoyees en `CF-Access-Client-Id` et `CF-Access-Client-Secret` (login des acteurs compris), jamais journalisees ni ecrites dans le rapport.
+- macOS : monter la limite de descripteurs avant le run (`ulimit -n 10240`), la valeur par defaut (256) coupe les connexions bien avant 1 000 req/s.
+- Confirmation avant chaque palier (`LOAD_CONFIRM=false` pour la couper). Ctrl+C termine la fenetre en cours.
+- Chaque requete porte `X-Load-Test: 1` pour filtrer le trafic dans Datadog. Les horodatages de chaque palier sont dans le rapport.
+
+| Variable | Defaut | Role |
+| :--- | :--- | :--- |
+| `LOAD_BASE_URL` | obligatoire | Gateway visee (aucune valeur par defaut) |
+| `LOAD_STEPS` | `50,100,200,400,800,1000` | Debits cibles en req/s |
+| `LOAD_STEP_SECONDS` / `LOAD_WARMUP_SECONDS` | `60` / `10` | Duree de mesure et echauffement par palier |
+| `LOAD_ACTORS` | `200` | Comptes existants utilises (memes identites que le pool principal, aucun renommage) |
+| `LOAD_MIX` | `events-list:40,posts-list:30,me:20,is-following:10` | Routes et poids |
+| `LOAD_TIMEOUT_MS` | `10000` | Delai par requete |
+| `LOAD_REPORT_PATH` | `load-report.json` | Rapport JSON, tableau affiche en fin de run |
