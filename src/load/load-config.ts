@@ -24,6 +24,11 @@ export interface LoadConfig {
   /** Nombre de fenetres consecutives hors seuil avant l'arret. */
   abortWindows: number;
   mix: RouteWeight[];
+  /**
+   * Jeton de service Cloudflare Access (memes variables que nativapp/.env). Vide : aucun en-tete.
+   * Les valeurs ne sont jamais journalisees ni ecrites dans le rapport.
+   */
+  accessHeaders: Record<string, string>;
   /** Demande une confirmation sur stdin avant chaque palier. */
   confirmEachStep: boolean;
   reportPath: string;
@@ -84,6 +89,17 @@ export function normalizeBaseUrl(raw: string): string {
   return trimmed.endsWith('/api/v1') ? trimmed : `${trimmed}/api/v1`;
 }
 
+/** Les deux variables vont ensemble : une seule renseignee est une erreur de saisie, pas un choix. */
+export function parseAccessHeaders(env: NodeJS.ProcessEnv): Record<string, string> {
+  const id = env.CF_ACCESS_CLIENT_ID?.trim();
+  const secret = env.CF_ACCESS_CLIENT_SECRET?.trim();
+  if (!id && !secret) return {};
+  if (!id || !secret) {
+    throw new Error('CF_ACCESS_CLIENT_ID et CF_ACCESS_CLIENT_SECRET doivent etre renseignes ensemble');
+  }
+  return { 'CF-Access-Client-Id': id, 'CF-Access-Client-Secret': secret };
+}
+
 export function loadLoadConfig(env: NodeJS.ProcessEnv = process.env): LoadConfig {
   const baseUrl = env.LOAD_BASE_URL?.trim();
   if (!baseUrl) {
@@ -103,6 +119,7 @@ export function loadLoadConfig(env: NodeJS.ProcessEnv = process.env): LoadConfig
     abortP95Ms: readNumber(env, 'LOAD_ABORT_P95_MS', 2000, positive, 'millisecondes > 0'),
     abortWindows: readNumber(env, 'LOAD_ABORT_WINDOWS', 2, (v) => Number.isInteger(v) && v > 0, 'entier > 0'),
     mix: parseMix(env.LOAD_MIX ?? DEFAULT_MIX),
+    accessHeaders: parseAccessHeaders(env),
     confirmEachStep: (env.LOAD_CONFIRM ?? 'true').toLowerCase() !== 'false',
     reportPath: env.LOAD_REPORT_PATH?.trim() || 'load-report.json',
   };

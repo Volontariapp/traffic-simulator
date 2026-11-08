@@ -24,6 +24,26 @@ describe('createSender', () => {
     assert.equal((init.headers as Record<string, string>)['X-Load-Test'], '1');
   });
 
+  it('ajoute les en-tetes supplementaires a chaque tentative, y compris apres un 401', async () => {
+    let call = 0;
+    const fetchFn = mock.fn<FetchLike>(async () =>
+      call++ === 0 ? new Response('', { status: 401 }) : new Response('{}', { status: 200 }),
+    );
+    const send = createSender({
+      baseUrl: 'http://gw.test',
+      timeoutMs: 1000,
+      fetchFn,
+      extraHeaders: { 'CF-Access-Client-Id': 'id-1' },
+      refresher: async () => 'fresh',
+    });
+
+    await send(TARGET, 'stale');
+
+    for (const callRecord of fetchFn.mock.calls) {
+      assert.equal((callRecord.arguments[1].headers as Record<string, string>)['CF-Access-Client-Id'], 'id-1');
+    }
+  });
+
   it('rejoue une fois avec le nouveau jeton apres un 401', async () => {
     let call = 0;
     const fetchFn = mock.fn<FetchLike>(async () =>

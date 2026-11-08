@@ -23,6 +23,11 @@ export class AbortPolicy {
         `erreurs ${(window.errorRate * 100).toFixed(1)} % > ${(this.thresholds.maxErrorRate * 100).toFixed(1)} %`,
       );
     }
+    if (window.count > 0 && window.shedRate > this.thresholds.maxErrorRate) {
+      reasons.push(
+        `delestage 429 ${(window.shedRate * 100).toFixed(1)} % > ${(this.thresholds.maxErrorRate * 100).toFixed(1)} % (rate limit atteint, la mesure n'est plus celle de l'application)`,
+      );
+    }
     if (window.count > 0 && window.p95 > this.thresholds.maxP95Ms) {
       reasons.push(`p95 ${Math.round(window.p95)} ms > ${this.thresholds.maxP95Ms} ms`);
     }

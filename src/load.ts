@@ -17,7 +17,10 @@ async function main(): Promise<void> {
   console.log(`[load] cible ${config.baseUrl}`);
   console.log(`[load] paliers ${config.steps.join(', ')} req/s, ${config.stepSeconds} s chacun`);
 
-  const client = new ApiClient(config.baseUrl);
+  const hasAccessToken = Object.keys(config.accessHeaders).length > 0;
+  console.log(`[load] jeton Cloudflare Access : ${hasAccessToken ? 'present' : 'absent'}`);
+
+  const client = new ApiClient(config.baseUrl, config.accessHeaders);
   // Memes options d'identite que le pool principal du simulateur : aucun compte n'est renomme
   const pool = new ActorPool(client, 800, { reservedPseudos: reservedLocalPseudos() });
   await pool.initialize(config.actors, 0, false);
@@ -46,6 +49,7 @@ async function main(): Promise<void> {
     send: createSender({
       baseUrl: config.baseUrl,
       timeoutMs: config.timeoutMs,
+      extraHeaders: config.accessHeaders,
       refresher: (stale) => pool.renewSession(stale),
     }),
     log: (line) => console.log(line),

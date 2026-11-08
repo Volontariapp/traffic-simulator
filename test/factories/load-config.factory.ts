@@ -14,6 +14,7 @@ export function buildLoadConfig(overrides: Partial<LoadConfig> = {}): LoadConfig
     abortP95Ms: 2000,
     abortWindows: 2,
     mix: [{ route: 'events-list', weight: 1 }],
+    accessHeaders: {},
     confirmEachStep: false,
     reportPath: 'load-report.test.json',
     ...overrides,

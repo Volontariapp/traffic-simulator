@@ -25,6 +25,29 @@ describe('loadLoadConfig', () => {
     assert.equal(config.confirmEachStep, false);
   });
 
+  it('construit les en-tetes Cloudflare Access depuis les variables de nativapp/.env', () => {
+    const config = loadLoadConfig({
+      LOAD_BASE_URL: 'http://gw.test',
+      CF_ACCESS_CLIENT_ID: 'id-1',
+      CF_ACCESS_CLIENT_SECRET: 'secret-1',
+    });
+    assert.deepEqual(config.accessHeaders, {
+      'CF-Access-Client-Id': 'id-1',
+      'CF-Access-Client-Secret': 'secret-1',
+    });
+  });
+
+  it('ne met aucun en-tete sans jeton', () => {
+    assert.deepEqual(loadLoadConfig({ LOAD_BASE_URL: 'http://gw.test' }).accessHeaders, {});
+  });
+
+  it('refuse un jeton Cloudflare Access incomplet sans afficher la valeur', () => {
+    assert.throws(
+      () => loadLoadConfig({ LOAD_BASE_URL: 'http://gw.test', CF_ACCESS_CLIENT_ID: 'seul-id' }),
+      (error: Error) => /ensemble/.test(error.message) && !error.message.includes('seul-id'),
+    );
+  });
+
   it('rejette une valeur numerique invalide en nommant la variable', () => {
     assert.throws(
       () => loadLoadConfig({ LOAD_BASE_URL: 'http://gw.test', LOAD_ABORT_ERROR_RATE: '2' }),

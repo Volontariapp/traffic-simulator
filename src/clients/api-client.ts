@@ -21,7 +21,14 @@ export class ApiClient {
     this.tokenRefresher = refresher;
   }
 
-  constructor(rawBaseUrl: string) {
+  /**
+   * `extraHeaders` : en-tetes ajoutes a chaque requete (ex. jeton de service Cloudflare Access quand
+   * la gateway est jointe par son URL publique). Vide en cluster : l'appel est direct.
+   */
+  constructor(
+    rawBaseUrl: string,
+    private readonly extraHeaders: Readonly<Record<string, string>> = {},
+  ) {
     const trimmed = rawBaseUrl.replace(/\/+$/, '');
     this.baseUrl = trimmed.endsWith('/api/v1') ? trimmed : `${trimmed}/api/v1`;
   }
@@ -35,6 +42,7 @@ export class ApiClient {
     const url = `${this.baseUrl}${endpoint}`;
     const buildHeaders = (bearer?: string): Record<string, string> => ({
       'Content-Type': 'application/json',
+      ...this.extraHeaders,
       ...(options.headers as Record<string, string>),
       ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
     });

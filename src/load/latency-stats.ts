@@ -37,6 +37,8 @@ export interface LatencySummary {
   count: number;
   errors: number;
   errorRate: number;
+  /** Part de 429 : un rate limit repond vite, il ne fait ni erreur ni p95 mais invalide la mesure. */
+  shedRate: number;
   p50: number;
   p95: number;
   p99: number;
@@ -67,10 +69,12 @@ export function percentile(sorted: readonly number[], p: number): number {
 function summarize(samples: readonly Sample[]): LatencySummary {
   const sorted = samples.map((s) => s.ms).sort((a, b) => a - b);
   const errors = samples.filter((s) => ERROR_OUTCOMES.has(s.outcome)).length;
+  const shed = samples.filter((s) => s.outcome === 'shed').length;
   return {
     count: samples.length,
     errors,
     errorRate: samples.length === 0 ? 0 : errors / samples.length,
+    shedRate: samples.length === 0 ? 0 : shed / samples.length,
     p50: percentile(sorted, 50),
     p95: percentile(sorted, 95),
     p99: percentile(sorted, 99),

@@ -15,6 +15,8 @@ export type LoadSender = (target: LoadTarget, token: string) => Promise<LoadResp
 export interface SenderOptions {
   baseUrl: string;
   timeoutMs: number;
+  /** En-tetes ajoutes a chaque requete (jeton Cloudflare Access). */
+  extraHeaders?: Readonly<Record<string, string>>;
   refresher?: TokenRefresher;
   fetchFn?: FetchLike;
   now?: () => number;
@@ -42,6 +44,7 @@ export function createSender(options: SenderOptions): LoadSender {
           fetchFn(url, {
             method: 'GET',
             headers: {
+              ...options.extraHeaders,
               Authorization: `Bearer ${bearer}`,
               'X-Load-Test': '1',
               'User-Agent': 'volontariapp-load-ramp',
