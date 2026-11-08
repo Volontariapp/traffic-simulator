@@ -84,6 +84,38 @@ Pour qu'un utilisateur reel voie de l'activite pres de lui, quel que soit l'endr
 
 En local (`NODE_ENV=local`), `post-processor-event` saute le geocodage : les events n'ont alors pas de coordonnees.
 
+## Relations, activité de fond et montée en charge
+
+Trois moteurs donnent au réseau l'allure d'une vraie communauté. Ils tournent dans le même pod que le reste et respectent la fenêtre de sommeil.
+
+**Graphe de follow entre acteurs** (`SocialGraphEngine`). Chaque acteur du pool principal en suit `SOCIAL_FOLLOWS_MIN` à `SOCIAL_FOLLOWS_MAX`, avec une préférence pour les comptes populaires (queue longue : quelques comptes très suivis, la plupart peu), et `SOCIAL_RECIPROCITY_PERCENT` % des cibles suivent en retour. Le plan est une fonction pure des emails (`src/social/follow-plan.ts`) : un redéploiement retrouve exactement les mêmes liens, et un acteur absent ne change pas ceux des autres. Au démarrage, trois liens sentinelles (premier, milieu, dernier) sont lus avec `GET /social/users/:id/is-following` : s'ils existent, rien n'est écrit. Sinon le plan est appliqué en arrière-plan, `SOCIAL_FOLLOW_CONCURRENCY` appels à la fois avec `SOCIAL_FOLLOW_PAUSE_MS` entre deux lots, pour ne pas saturer `ms-social` et Neo4j. Un 409 (lien déjà présent) compte comme un succès. Avec 1500 acteurs : environ 34 000 liens, une trentaine de minutes la première fois. `FORCE_SOCIAL_SYNC=true` rejoue tout le plan.
+
+**Activité de fond** (`AmbientActivityEngine`). En continu, des acteurs likent et commentent les posts des simulateurs (events parisiens et locaux, 50 derniers posts relus toutes les 15 s). Un acteur ne like et ne commente qu'une fois par post, les textes de commentaires ne se répètent pas sur un même post, et les posts des comptes qu'un acteur suit pèsent 4 fois plus dans son tirage. Les posts de vrais utilisateurs sont exclus : `UserReactionEngine` s'en charge avec son propre échéancier. Une rafale optionnelle (`AMBIENT_BURST_SIZE`) reproduit un pic d'utilisateurs simultanés ; `AMBIENT_MAX_CONCURRENCY` borne le nombre d'appels en vol, rafale comprise.
+
+**Followers des vrais comptes** (`RealUserFollowEngine`). Avec le compte ADMIN du simulateur, la liste `GET /users` est parcourue en entier (pages de 500) toutes les `REAL_USERS_SCAN_INTERVAL_SEC` secondes. Chaque compte réel nouveau (ni acteur, ni email du domaine du simulateur, ni le compte admin) est suivi par `REAL_FOLLOWERS_MIN` à `REAL_FOLLOWERS_MAX` acteurs tirés au hasard, étalés entre 5 s et 10 min pour éviter une rafale de notifications. `REAL_FOLLOW_EXISTING=true` traite aussi les comptes déjà présents au démarrage ; un redémarrage ne crée ni doublon ni nouvelle notification (409). La liste n'a ni date ni ordre garanti : le moteur compare à l'ensemble déjà vu.
+
+| Variable | Défaut | Rôle |
+| :--- | :--- | :--- |
+| `SOCIAL_GRAPH_ENABLED` | `true` | Active le graphe de follow |
+| `SOCIAL_FOLLOWS_MIN` / `SOCIAL_FOLLOWS_MAX` | `5` / `30` | Follows sortants par acteur |
+| `SOCIAL_RECIPROCITY_PERCENT` | `30` | Part des cibles qui suivent en retour |
+| `SOCIAL_FOLLOW_CONCURRENCY` | `10` | Appels de follow simultanés pendant la construction |
+| `SOCIAL_FOLLOW_PAUSE_MS` | `500` | Pause entre deux lots d'écriture |
+| `FORCE_SOCIAL_SYNC` | `false` | Rejoue tout le plan malgré les sentinelles |
+| `AMBIENT_ENABLED` | `true` | Active l'activité de fond |
+| `AMBIENT_ACTIONS_PER_SEC` | `8` | Débit continu (likes et commentaires) |
+| `AMBIENT_COMMENT_PERCENT` | `15` | Part des actions qui sont des commentaires |
+| `AMBIENT_MAX_LIKES_PER_POST` / `AMBIENT_MAX_COMMENTS_PER_POST` | `150` / `25` | Plafonds par post |
+| `AMBIENT_BURST_SIZE` | `0` | Actions par rafale (0 : pas de rafale) |
+| `AMBIENT_BURST_INTERVAL_MIN` | `30` | Délai entre deux rafales |
+| `AMBIENT_MAX_CONCURRENCY` | `250` | Appels simultanés maximum |
+| `REAL_FOLLOWERS_ENABLED` | `true` | Active les followers des vrais comptes (compte ADMIN requis) |
+| `REAL_FOLLOWERS_MIN` / `REAL_FOLLOWERS_MAX` | `6` / `15` | Acteurs qui suivent chaque compte réel |
+| `REAL_USERS_SCAN_INTERVAL_SEC` | `120` | Fréquence de lecture de la liste des utilisateurs |
+| `REAL_FOLLOW_EXISTING` | `true` | Inclut les comptes déjà présents au démarrage |
+
+**Passer à 1500 acteurs.** `TARGET_ACTORS=1500` (et `LOCAL_ACTORS=200`). Le pool principal écarte désormais les pseudos du pool local (`reservedLocalPseudos`), indispensable au-delà de 1000 acteurs ; les 1000 premiers acteurs gardent exactement leur identité. Le rôle organisateur reste 25 % du pool : les comptes d'index 75 à 374, volontaires jusque-là, deviennent organisateurs en mémoire (leur bio en base n'est pas réécrite, seul le pseudo est réconcilié). Le démarrage se connecte ou crée 1500 comptes par lots de 20 (hachage de mot de passe côté `ms-user`) et le réveil après la fenêtre de sommeil rafraîchit 1500 sessions : prévoir plusieurs minutes. Mesurer avant d'ajouter des pods : le goulot est la gateway, `ms-social` et `ms-post`, pas ce process.
+
 ## Fenêtre de sommeil
 
 Entre `SLEEP_START_HOUR` et `SLEEP_END_HOUR` (fuseau `SLEEP_TIMEZONE`), le simulateur n'appelle plus l'API : aucun event, aucune réaction. `SLEEP_DRAIN_SEC` avant le début, la création d'events est suspendue ; à l'entrée dans la fenêtre, les events encore actifs sont clôturés. Au réveil, les sessions des acteurs sont rafraîchies. Le pod reste en vie, seul le trafic est coupé.

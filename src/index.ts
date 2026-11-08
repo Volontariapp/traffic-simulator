@@ -5,7 +5,15 @@ import { ParisLiveEngine } from './engines/paris-live.engine.js';
 import { MassEventsEngine } from './engines/mass-events.engine.js';
 import { UserReactionEngine } from './engines/user-reaction.engine.js';
 import { LocalEventsEngine } from './engines/local-events.engine.js';
-import { LOCAL_SEED_OFFSET, localEmailForIndex, reservedMainPseudos } from './actors/actor-identity.js';
+import { SocialGraphEngine } from './engines/social-graph.engine.js';
+import { AmbientActivityEngine } from './engines/ambient-activity.engine.js';
+import { RealUserFollowEngine } from './engines/real-user-follow.engine.js';
+import {
+  LOCAL_SEED_OFFSET,
+  localEmailForIndex,
+  reservedLocalPseudos,
+  reservedMainPseudos,
+} from './actors/actor-identity.js';
 import { createNominatimGeocoder } from './geo/reverse-geocoder.js';
 import { buildCenterProvider } from './geo/center-provider.js';
 import { createActiveLocationsSource } from './clients/active-locations.source.js';
@@ -13,7 +21,7 @@ import { loadConfig } from './config/simulator-config.js';
 import { getSleepPhase } from './schedule/sleep-window.js';
 
 const config = loadConfig();
-const { sleep, reaction, local } = config;
+const { sleep, reaction, local, social, ambient, realUsers } = config;
 
 console.log('====================================================');
 console.log('Volontariapp Live Traffic Simulator (Daemon)');
@@ -41,6 +49,31 @@ console.log(
       : 'desactive (ni LOCAL_CENTERS ni SIMULATOR_ADMIN_EMAIL/PASSWORD)'
   }`,
 );
+console.log(
+  `Graphe de follow      : ${
+    social.enabled
+      ? `${social.followsMin}-${social.followsMax} follows par acteur, ${Math.round(social.reciprocity * 100)}% de follow-back, ${social.concurrency} appels simultanes`
+      : 'desactive'
+  }`,
+);
+console.log(
+  `Activite de fond      : ${
+    ambient.enabled
+      ? `${ambient.actionsPerSec} actions/s (${Math.round(ambient.commentRatio * 100)}% commentaires)${
+          ambient.burstSize > 0
+            ? `, rafale de ${ambient.burstSize} toutes les ${ambient.burstIntervalMs / 60_000} min (concurrence max ${ambient.maxConcurrency})`
+            : ''
+        }`
+      : 'desactivee'
+  }`,
+);
+console.log(
+  `Followers vrais users : ${
+    realUsers.enabled && autoDiscovery
+      ? `${realUsers.followersMin}-${realUsers.followersMax} acteurs par compte reel, scan toutes les ${realUsers.scanIntervalMs / 1000}s${realUsers.includeExisting ? ', comptes existants inclus' : ''}`
+      : 'desactive (compte ADMIN requis)'
+  }`,
+);
 console.log('====================================================');
 
 let isRunning = true;
@@ -60,7 +93,8 @@ async function waitWhileRunning(ms: number): Promise<void> {
 async function bootstrap() {
   const apiClient = new ApiClient(config.apiGatewayUrl);
   const mediaUploader = new MediaUploader(config.apiGatewayUrl);
-  const actorPool = new ActorPool(apiClient);
+  // Le pool principal ecarte les pseudos des acteurs locaux : indispensable au-dela de 1000 acteurs
+  const actorPool = new ActorPool(apiClient, 800, { reservedPseudos: reservedLocalPseudos() });
   mediaUploader.setTokenRefresher((staleToken) => actorPool.renewSession(staleToken));
 
   // Demarre pendant la nuit : on ne touche pas a l'API avant le reveil
@@ -139,6 +173,19 @@ async function bootstrap() {
   const massEventsEngine = new MassEventsEngine(apiClient, actorPool);
   const userReactionEngine = new UserReactionEngine(apiClient, actorPool, reaction);
 
+  // Relations et activite de fond : graphe de follow, likes et commentaires continus, followers des vrais comptes
+  const socialGraphEngine = new SocialGraphEngine(apiClient, actorPool, social);
+  const ambientEngine = new AmbientActivityEngine(apiClient, actorPool, ambient, (id) =>
+    socialGraphEngine.followsOf(id),
+  );
+  const realUserFollowEngine =
+    realUsers.enabled && local.adminEmail && local.adminPassword
+      ? new RealUserFollowEngine(apiClient, actorPool, realUsers, {
+          email: local.adminEmail,
+          password: local.adminPassword,
+        })
+      : undefined;
+
   // Renouvellement preventif des sessions : pas d'appel API pendant la fenetre de sommeil
   actorPool.startTokenKeepAlive({
     intervalMs: config.tokenCheckIntervalMs,
@@ -158,10 +205,29 @@ async function bootstrap() {
     await massEventsEngine.seedMassEvents(config.massEventsCount);
   }
 
-  // 4. Deux boucles independantes : les arrondissements (lente) et la reaction sociale (rapide)
-  console.log('\nDemarrage de la boucle temps reel (20 arrondissements de Paris + ecoute sociale)...');
-
   let wasAsleep = false;
+
+  // 3 bis. Graphe de follow : plan en memoire tout de suite (il oriente l'activite de fond),
+  // ecriture en arriere-plan pour ne pas retarder le demarrage des boucles
+  if (social.enabled) {
+    const planned = socialGraphEngine.prepare();
+    console.log(`[SocialGraph] Plan de ${planned} liens pour ${actorPool.getAllActors().length} acteurs.`);
+    void socialGraphEngine
+      .sync(() => getSleepPhase(new Date(), sleep) !== 'asleep' && !wasAsleep)
+      .then((result) =>
+        console.log(
+          result.skipped
+            ? '[SocialGraph] Graphe deja en place (liens sentinelles presents) : aucune ecriture.'
+            : `[SocialGraph] Graphe applique : ${result.created} crees, ${result.existing} existants, ${result.failed} echecs.`,
+        ),
+      )
+      .catch((err: unknown) =>
+        console.error('[SocialGraph] Erreur pendant la construction du graphe :', err instanceof Error ? err.message : String(err)),
+      );
+  }
+
+  // 4. Boucles independantes : les arrondissements (lente) et la reaction sociale (rapide)
+  console.log('\nDemarrage de la boucle temps reel (20 arrondissements de Paris + ecoute sociale)...');
 
   const liveLoop = async () => {
     while (isRunning) {
@@ -172,6 +238,7 @@ async function bootstrap() {
           wasAsleep = true;
           console.log('[Daemon] Entree dans la fenetre de sommeil : cloture des events et mise en pause.');
           userReactionEngine.reset();
+          ambientEngine.reset();
           await parisLiveEngine.finishAllActive();
           await localLiveEngine.finishAllActive();
         }
@@ -215,6 +282,38 @@ async function bootstrap() {
     console.log('[Daemon] Boucle de reaction arretee.');
   };
 
+  const ambientLoop = async () => {
+    while (isRunning) {
+      if (getSleepPhase(new Date(), sleep) === 'asleep' || wasAsleep) {
+        await waitWhileRunning(5_000);
+        continue;
+      }
+      try {
+        await ambientEngine.tick();
+      } catch (err) {
+        console.error('[Daemon] Erreur dans la boucle d activite de fond :', err instanceof Error ? err.message : String(err));
+      }
+      await waitWhileRunning(1_000);
+    }
+    console.log('[Daemon] Boucle d activite de fond arretee.');
+  };
+
+  const realFollowLoop = async (engine: RealUserFollowEngine) => {
+    while (isRunning) {
+      if (getSleepPhase(new Date(), sleep) === 'asleep' || wasAsleep) {
+        await waitWhileRunning(5_000);
+        continue;
+      }
+      try {
+        await engine.tick();
+      } catch (err) {
+        console.error('[Daemon] Erreur dans la boucle de follow des vrais comptes :', err instanceof Error ? err.message : String(err));
+      }
+      await waitWhileRunning(1_000);
+    }
+    console.log('[Daemon] Boucle de follow des vrais comptes arretee.');
+  };
+
   const localLoop = async () => {
     while (isRunning) {
       const phase = getSleepPhase(new Date(), sleep);
@@ -236,6 +335,8 @@ async function bootstrap() {
   void liveLoop();
   void reactionLoop();
   if (localActive) void localLoop();
+  if (ambient.enabled) void ambientLoop();
+  if (realUserFollowEngine) void realFollowLoop(realUserFollowEngine);
 }
 
 function handleShutdown(signal: string) {

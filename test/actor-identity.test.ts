@@ -4,6 +4,7 @@ import {
   LOCAL_SEED_OFFSET,
   buildActorIdentities,
   localEmailForIndex,
+  reservedLocalPseudos,
   reservedMainPseudos,
 } from '../src/actors/actor-identity.js';
 
@@ -83,3 +84,31 @@ describe('identites des acteurs locaux', () => {
   });
 });
 
+
+describe('pool principal a 1500 acteurs', () => {
+  const mainRole = (i: number) => (i < 375 ? 'ORGANIZER' : 'VOLUNTEER');
+  const reserved = reservedLocalPseudos();
+  const main = buildActorIdentities(1500, mainRole, { reservedPseudos: reserved });
+  const local = buildActorIdentities(200, () => 'VOLUNTEER', {
+    emailFor: localEmailForIndex,
+    seedOffset: LOCAL_SEED_OFFSET,
+    reservedPseudos: reservedMainPseudos(),
+    localBios: true,
+  });
+
+  it('genere 1500 pseudos uniques, disjoints de ceux des 200 acteurs locaux', () => {
+    const mainPseudos = new Set(main.map((i) => i.pseudo));
+    assert.equal(mainPseudos.size, 1500);
+    assert.equal(new Set(local.map((i) => i.pseudo)).size, 200);
+    for (const { pseudo } of local) assert.equal(mainPseudos.has(pseudo), false, `collision ${pseudo}`);
+  });
+
+  it('ne change aucune identite des 1000 premiers acteurs deja en base', () => {
+    const legacy = buildActorIdentities(1000, mainRole);
+    assert.deepEqual(main.slice(0, 1000), legacy);
+  });
+
+  it('garde des pseudos valides meme apres suffixe', () => {
+    for (const { pseudo } of main) assert.match(pseudo, /^[a-z0-9._]{3,30}$/);
+  });
+});

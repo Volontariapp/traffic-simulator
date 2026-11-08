@@ -212,6 +212,46 @@ export class ApiClient {
     return res.ok ? (res.data?.cells ?? []) : undefined;
   }
 
+  /**
+   * Suit un utilisateur. 409 (relation deja presente) n'est pas une erreur : 'exists', ce qui rend
+   * un rejeu complet du plan inoffensif.
+   */
+  async followUser(token: string, userId: string): Promise<'created' | 'exists' | 'failed'> {
+    const res = await this.request(`/social/follow/${userId}`, { method: 'POST' }, token, true);
+    if (res.ok) return 'created';
+    return res.status === 409 ? 'exists' : 'failed';
+  }
+
+  /** Le compte authentifie suit-il `userId` ? undefined si la lecture echoue. */
+  async isFollowing(token: string, userId: string): Promise<boolean | undefined> {
+    const res = await this.request<{ isFollowing?: boolean }>(
+      `/social/users/${userId}/is-following`,
+      { method: 'GET' },
+      token,
+      true,
+    );
+    return res.ok ? Boolean(res.data?.isFollowing) : undefined;
+  }
+
+  /**
+   * Une page de la liste admin des utilisateurs (role ADMIN requis). undefined si refus ou erreur.
+   * Aucun ordre ni date de creation n'est garanti : l'appelant parcourt tout et compare.
+   */
+  async listUsers(
+    token: string,
+    page: number,
+    limit: number,
+  ): Promise<Array<{ id: string; email?: string; pseudo?: string; role?: string }> | undefined> {
+    const q = new URLSearchParams({ page: String(page), limit: String(limit) });
+    const res = await this.request<{ users?: Array<{ id: string; email?: string; pseudo?: string; role?: string }> }>(
+      `/users?${q.toString()}`,
+      { method: 'GET' },
+      token,
+      true,
+    );
+    return res.ok ? (res.data?.users ?? []) : undefined;
+  }
+
   async createEvent(
     token: string,
     payload: {
@@ -349,8 +389,8 @@ export class ApiClient {
     return res.data?.id ?? res.data?.post?.id;
   }
 
-  async likePost(token: string, postId: string): Promise<boolean> {
-    const res = await this.request(`/social/likes/${postId}`, { method: 'POST' }, token);
+  async likePost(token: string, postId: string, silent = false): Promise<boolean> {
+    const res = await this.request(`/social/likes/${postId}`, { method: 'POST' }, token, silent);
     return res.ok;
   }
 

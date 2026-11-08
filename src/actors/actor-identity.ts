@@ -188,7 +188,29 @@ export function localEmailForIndex(index: number): string {
 /** Decalage de graine des acteurs locaux : au-dela de toute taille realiste du pool principal. */
 export const LOCAL_SEED_OFFSET = 100_000;
 
+/** Nombre d'identites de chaque pool que l'autre pool ecarte : au-dela de la taille realiste des pools. */
+const RESERVED_POOL_SIZE = 1000;
+
 /** Pseudos que le pool principal peut prendre (jusqu'a 1000 acteurs), a ecarter pour les locaux. */
 export function reservedMainPseudos(): Set<string> {
-  return new Set(buildActorIdentities(1000, () => 'VOLUNTEER').map((identity) => identity.pseudo));
+  return new Set(
+    buildActorIdentities(RESERVED_POOL_SIZE, () => 'VOLUNTEER').map((identity) => identity.pseudo),
+  );
+}
+
+/**
+ * Pseudos que le pool local peut prendre (jusqu'a 1000 acteurs), a ecarter pour le pool principal.
+ * Les acteurs locaux evitent deja les 1000 premiers pseudos principaux : les 1000 premiers acteurs
+ * principaux ne sont donc jamais touches. Seuls ceux d'index >= 1000 (pool principal au-dela de
+ * 1000) prennent un suffixe numerique en cas de collision avec un pseudo local.
+ */
+export function reservedLocalPseudos(): Set<string> {
+  return new Set(
+    buildActorIdentities(RESERVED_POOL_SIZE, () => 'VOLUNTEER', {
+      emailFor: localEmailForIndex,
+      seedOffset: LOCAL_SEED_OFFSET,
+      reservedPseudos: reservedMainPseudos(),
+      localBios: true,
+    }).map((identity) => identity.pseudo),
+  );
 }
