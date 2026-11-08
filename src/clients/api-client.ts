@@ -193,6 +193,25 @@ export class ApiClient {
     return res.ok;
   }
 
+  /**
+   * Cellules de 1 km (anonymes) des utilisateurs qui ont envoye une position recemment.
+   * Route admin : le token doit etre celui d'un compte ADMIN. undefined si refus ou erreur.
+   */
+  async getActiveUserLocations(
+    token: string,
+    maxAgeMinutes: number,
+    silent = false,
+  ): Promise<Array<{ lat: number; lng: number }> | undefined> {
+    const q = new URLSearchParams({ maxAgeMinutes: String(maxAgeMinutes) });
+    const res = await this.request<{ cells?: Array<{ lat: number; lng: number }> }>(
+      `/ranking/admin/active-locations?${q.toString()}`,
+      { method: 'GET' },
+      token,
+      silent,
+    );
+    return res.ok ? (res.data?.cells ?? []) : undefined;
+  }
+
   async createEvent(
     token: string,
     payload: {

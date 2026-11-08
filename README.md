@@ -50,21 +50,31 @@ En prévention, le simulateur vérifie le claim `exp` des access tokens toutes l
 | `TOKEN_REFRESH_AHEAD_SEC` | `300` | Renouvelle un token expirant dans moins de ce délai |
 | `TOKEN_CHECK_INTERVAL_SEC` | `60` | Fréquence de vérification des expirations |
 
-## Events autour d'un utilisateur
+## Events autour des utilisateurs
 
-Pour qu'un utilisateur reel voie de l'activite pres de lui, quel que soit l'endroit, le simulateur peut creer des events en direct dans un rayon autour d'un ou plusieurs centres (par exemple la position de test d'un telephone). Desactive tant que `LOCAL_CENTERS` est vide. Les events parisiens et le pool principal ne changent pas.
+Pour qu'un utilisateur reel voie de l'activite pres de lui, quel que soit l'endroit, le simulateur cree des events en direct dans un rayon autour de chaque centre. Les events parisiens et le pool principal ne changent pas. Desactive tant qu'aucun centre n'est donne.
 
-Le simulateur ne lit pas la position des utilisateurs : `ms-ranking` la stocke arrondie a 1 km et chiffree, sans route de lecture. Les centres se declarent donc par variable d'environnement.
+**D'ou viennent les centres**
+- **Automatiquement** : avec `SIMULATOR_ADMIN_EMAIL` et `SIMULATOR_ADMIN_PASSWORD` (un compte ADMIN dedie), le simulateur lit a chaque vague `GET /ranking/admin/active-locations`. La route renvoie les positions des utilisateurs qui en ont envoye une dans les `LOCAL_ACTIVE_MAX_AGE_MIN` dernieres minutes, arrondies a 1 km et dedoublonnees, sans aucun identifiant. Les comptes du simulateur n'envoient jamais de position : seuls de vrais utilisateurs apparaissent. Quand un utilisateur ferme l'app, sa cellule sort de la liste au bout de ce delai.
+- **A la main** : `LOCAL_CENTERS="lat,lng;lat,lng"`, en plus ou a la place. Utile pour forcer un lieu de test.
+- Si la lecture automatique echoue (route indisponible, identifiants refuses), la vague continue avec les centres fixes.
 
-- Toutes les `LOCAL_EVENTS_INTERVAL_SEC` secondes (5 min), une vague de `LOCAL_EVENTS_MIN` a `LOCAL_EVENTS_MAX` events par centre.
-- Chaque event est pose sur un point tire uniformement dans le rayon. Le point est converti en adresse reelle (reverse-geocodage OpenStreetMap Nominatim, 1 requete par seconde au plus) : `post-processor-event` geocode ensuite cette adresse et pose les coordonnees. Si le point n'a pas d'adresse, 3 points sont essayes avant d'abandonner l'event.
+**Ce que fait une vague** (toutes les `LOCAL_EVENTS_INTERVAL_SEC`, 5 min)
+- `LOCAL_EVENTS_MIN` a `LOCAL_EVENTS_MAX` events par centre, avec au plus `LOCAL_MAX_CENTERS` centres (les centres fixes d'abord, puis un tirage au hasard parmi les cellules).
+- Chaque event est pose sur un point tire uniformement dans le rayon. Une position decouverte est arrondie a 1 km : le rayon de sa cellule est reduit de 710 m (la moitie de la diagonale) pour que l'event reste dans `LOCAL_RADIUS_METERS` de l'utilisateur, ou quasi, quel que soit son point exact dans la cellule.
+- Le point est converti en adresse reelle (reverse-geocodage OpenStreetMap Nominatim, 1 requete par seconde au plus) : `post-processor-event` geocode ensuite cette adresse et pose les coordonnees. Si le point n'a pas d'adresse, 3 points sont essayes avant d'abandonner l'event.
 - Meme cycle de vie que les events parisiens (cover, post d'ouverture, participants, emargement, bilan, cloture), avec une duree de `LOCAL_EVENT_LIFESPAN_SEC`.
 - Les organisateurs et participants sont un pool distinct de `LOCAL_ACTORS` comptes (`local.NNNN@simulator.volontariapp.test`), avec des pseudos et bios sans arrondissement. Leurs posts ne declenchent aucune reaction automatique.
 - La fenetre de sommeil s'applique : plus de vague pendant le vidage, events clotures a l'entree dans la fenetre.
 
+**Vie privee** : les positions ne sont ni journalisees ni stockees par le simulateur, qui ne garde que les cellules de la derniere lecture en memoire. La route est reservee aux admins cote gateway et cote `ms-ranking`.
+
 | Variable | Defaut | Role |
 | :--- | :--- | :--- |
-| `LOCAL_CENTERS` | vide | Centres `lat,lng;lat,lng` (vide : fonction desactivee) |
+| `SIMULATOR_ADMIN_EMAIL` / `SIMULATOR_ADMIN_PASSWORD` | vide | Compte ADMIN du simulateur (secret) : active la lecture des positions |
+| `LOCAL_CENTERS` | vide | Centres fixes `lat,lng;lat,lng` |
+| `LOCAL_MAX_CENTERS` | `10` | Plafond de centres par vague |
+| `LOCAL_ACTIVE_MAX_AGE_MIN` | `30` | Age maximal d'une position consideree comme active |
 | `LOCAL_ACTORS` | `40` | Comptes "gens du coin", en plus de `TARGET_ACTORS` |
 | `LOCAL_RADIUS_METERS` | `2000` | Rayon autour de chaque centre |
 | `LOCAL_EVENTS_INTERVAL_SEC` | `300` | Delai entre deux vagues |
@@ -72,7 +82,7 @@ Le simulateur ne lit pas la position des utilisateurs : `ms-ranking` la stocke a
 | `LOCAL_EVENT_LIFESPAN_SEC` | `900` | Duree d'un event en direct |
 | `LOCAL_GEOCODER_USER_AGENT` | `VolontariApp-TrafficSimulator/1.0` | User-Agent envoye a Nominatim |
 
-Exemple : `LOCAL_CENTERS="48.8566,2.3522" yarn dev`. En local (`NODE_ENV=local`), `post-processor-event` saute le geocodage : les events n'ont alors pas de coordonnees.
+En local (`NODE_ENV=local`), `post-processor-event` saute le geocodage : les events n'ont alors pas de coordonnees.
 
 ## Fenêtre de sommeil
 

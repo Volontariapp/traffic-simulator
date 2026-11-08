@@ -23,6 +23,13 @@ export interface LocalConfig {
   eventsMax: number;
   eventLifespanSec: number;
   geocoderUserAgent: string;
+  /** Plafond de centres (fixes + decouverts) par vague. */
+  maxCenters: number;
+  /** Compte ADMIN du simulateur : active la decouverte des positions des vrais utilisateurs. */
+  adminEmail?: string;
+  adminPassword?: string;
+  /** Une position plus ancienne que cela n'est plus consideree comme active. */
+  activeMaxAgeMinutes: number;
 }
 
 export interface SimulatorConfig {
@@ -133,6 +140,10 @@ export function loadConfig(env: Env = process.env): SimulatorConfig {
       eventsMax: localEvents.max,
       eventLifespanSec: readInt(env, 'LOCAL_EVENT_LIFESPAN_SEC', 900, 1),
       geocoderUserAgent: env.LOCAL_GEOCODER_USER_AGENT?.trim() || 'VolontariApp-TrafficSimulator/1.0',
+      maxCenters: readInt(env, 'LOCAL_MAX_CENTERS', 10, 1),
+      adminEmail: env.SIMULATOR_ADMIN_EMAIL?.trim() || undefined,
+      adminPassword: env.SIMULATOR_ADMIN_PASSWORD || undefined,
+      activeMaxAgeMinutes: readInt(env, 'LOCAL_ACTIVE_MAX_AGE_MIN', 30, 1),
     },
   };
 }

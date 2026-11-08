@@ -7,6 +7,8 @@ import { UserReactionEngine } from './engines/user-reaction.engine.js';
 import { LocalEventsEngine } from './engines/local-events.engine.js';
 import { LOCAL_SEED_OFFSET, localEmailForIndex, reservedMainPseudos } from './actors/actor-identity.js';
 import { createNominatimGeocoder } from './geo/reverse-geocoder.js';
+import { buildCenterProvider } from './geo/center-provider.js';
+import { createActiveLocationsSource } from './clients/active-locations.source.js';
 import { loadConfig } from './config/simulator-config.js';
 import { getSleepPhase } from './schedule/sleep-window.js';
 
@@ -31,11 +33,12 @@ console.log(
     sleep.enabled ? `${sleep.startHour}h-${sleep.endHour}h (${sleep.timeZone}), vidage ${sleep.drainSec}s avant` : 'desactivee'
   }`,
 );
+const autoDiscovery = Boolean(local.adminEmail && local.adminPassword);
 console.log(
   `Events autour des users: ${
-    local.centers.length > 0
-      ? `${local.centers.length} centre(s), rayon ${local.radiusMeters} m, ${local.eventsMin}-${local.eventsMax} events/vague toutes les ${local.intervalMs / 1000}s, ${local.actors} acteurs locaux`
-      : 'desactive (LOCAL_CENTERS vide)'
+    local.centers.length > 0 || autoDiscovery
+      ? `${local.centers.length} centre(s) fixe(s)${autoDiscovery ? ' + positions des utilisateurs reels (compte admin)' : ''}, rayon ${local.radiusMeters} m, ${local.eventsMin}-${local.eventsMax} events/vague/centre toutes les ${local.intervalMs / 1000}s, ${local.actors} acteurs locaux`
+      : 'desactive (ni LOCAL_CENTERS ni SIMULATOR_ADMIN_EMAIL/PASSWORD)'
   }`,
 );
 console.log('====================================================');
@@ -78,7 +81,7 @@ async function bootstrap() {
   }
 
   // 1 bis. Pool des "gens du coin" : client API propre (un seul rafraichisseur de token par client)
-  const localEnabled = local.centers.length > 0;
+  const localEnabled = local.centers.length > 0 || autoDiscovery;
   const localClient = new ApiClient(config.apiGatewayUrl);
   const localUploader = new MediaUploader(config.apiGatewayUrl);
   const localPool = new ActorPool(localClient, 800, {
@@ -118,6 +121,19 @@ async function bootstrap() {
   const localEventsEngine = new LocalEventsEngine(
     localLiveEngine,
     createNominatimGeocoder({ userAgent: local.geocoderUserAgent }),
+    buildCenterProvider({
+      staticCenters: local.centers,
+      radiusMeters: local.radiusMeters,
+      maxCenters: local.maxCenters,
+      discover:
+        autoDiscovery && local.adminEmail && local.adminPassword
+          ? createActiveLocationsSource(apiClient, {
+              email: local.adminEmail,
+              password: local.adminPassword,
+              maxAgeMinutes: local.activeMaxAgeMinutes,
+            })
+          : undefined,
+    }),
     local,
   );
   const massEventsEngine = new MassEventsEngine(apiClient, actorPool);

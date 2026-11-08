@@ -76,4 +76,25 @@ describe('loadConfig', () => {
     assert.throws(() => loadConfig({ LOCAL_EVENTS_MIN: '0' }), /LOCAL_EVENTS_MIN/);
     assert.throws(() => loadConfig({ LOCAL_EVENTS_MIN: '3', LOCAL_EVENTS_MAX: '1' }), /LOCAL_EVENTS_MAX/);
   });
+
+  it('lit le compte admin et les reglages de decouverte', () => {
+    const { local } = loadConfig({
+      SIMULATOR_ADMIN_EMAIL: ' sim-admin@simulator.test ',
+      SIMULATOR_ADMIN_PASSWORD: 'secret',
+      LOCAL_MAX_CENTERS: '4',
+      LOCAL_ACTIVE_MAX_AGE_MIN: '15',
+    });
+    assert.equal(local.adminEmail, 'sim-admin@simulator.test');
+    assert.equal(local.adminPassword, 'secret');
+    assert.equal(local.maxCenters, 4);
+    assert.equal(local.activeMaxAgeMinutes, 15);
+  });
+
+  it('n active pas la decouverte sans compte admin complet', () => {
+    const { local } = loadConfig({});
+    assert.equal(local.adminEmail, undefined);
+    assert.equal(local.adminPassword, undefined);
+    assert.equal(local.maxCenters, 10);
+    assert.equal(local.activeMaxAgeMinutes, 30);
+  });
 });
