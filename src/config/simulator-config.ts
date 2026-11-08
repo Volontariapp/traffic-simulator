@@ -20,6 +20,10 @@ export interface SimulatorConfig {
   massEventsCount: number;
   actorBatchPauseMs: number;
   forceIdentitySync: boolean;
+  /** Renouvellement preventif : token renouvele quand son expiration est dans moins de ce delai. */
+  tokenRefreshAheadMs: number;
+  /** Frequence de verification des expirations des sessions. */
+  tokenCheckIntervalMs: number;
   reaction: ReactionConfig;
   sleep: SleepConfig;
 }
@@ -81,6 +85,8 @@ export function loadConfig(env: Env = process.env): SimulatorConfig {
     massEventsCount: readInt(env, 'MASS_EVENTS_COUNT', 150, 1),
     actorBatchPauseMs: readInt(env, 'ACTOR_BATCH_PAUSE_MS', 1000, 0),
     forceIdentitySync: readBool(env, 'FORCE_IDENTITY_SYNC', false),
+    tokenRefreshAheadMs: readInt(env, 'TOKEN_REFRESH_AHEAD_SEC', 300, 1) * 1000,
+    tokenCheckIntervalMs: readInt(env, 'TOKEN_CHECK_INTERVAL_SEC', 60, 1) * 1000,
     reaction: {
       scanIntervalMs: readInt(env, 'POST_SCAN_INTERVAL_MS', 4000, 500),
       tickIntervalMs: readInt(env, 'REACTION_TICK_MS', 1000, 100),

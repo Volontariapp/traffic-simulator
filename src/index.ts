@@ -79,6 +79,13 @@ async function bootstrap() {
   const massEventsEngine = new MassEventsEngine(apiClient, actorPool);
   const userReactionEngine = new UserReactionEngine(apiClient, actorPool, reaction);
 
+  // Renouvellement preventif des sessions : pas d'appel API pendant la fenetre de sommeil
+  actorPool.startTokenKeepAlive({
+    intervalMs: config.tokenCheckIntervalMs,
+    marginMs: config.tokenRefreshAheadMs,
+    canRun: () => getSleepPhase(new Date(), sleep) !== 'asleep',
+  });
+
   // 3. Peuplement initial de masse si active
   if (config.initialMassSeed) {
     await massEventsEngine.seedMassEvents(config.massEventsCount);
