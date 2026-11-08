@@ -1,7 +1,7 @@
 import { fakerFR as faker } from '@faker-js/faker';
 import type { ApiClient, UserAuthCredentials } from '../clients/api-client.js';
 import type { ActorPool } from '../actors/actor-pool.js';
-import { PARIS_DISTRICTS, getRandomLocationForDistrict, type ParisLocation } from '../geo/paris-districts.js';
+import { OFF_GRID_DISTRICT, PARIS_DISTRICTS, getRandomLocationForDistrict, type ParisLocation } from '../geo/paris-districts.js';
 import { CURATED_THEMATIC_PHOTOS, detectTheme } from '../media/photo-bank.js';
 import type { MediaUploader } from '../media/uploader.js';
 import { generateEventBlueprint } from '../templates/event-blueprints.js';
@@ -27,6 +27,7 @@ export class ParisLiveEngine {
   private activeEvents = new Map<string, ActiveDistrictEvent>();
   // Faux pendant la phase de vidage nocturne : plus aucun nouvel event n'est cree
   private spawnEnabled = true;
+  private spawnSeq = 0;
 
   constructor(
     private readonly client: ApiClient,
@@ -63,20 +64,61 @@ export class ParisLiveEngine {
         if (this.spawnEnabled) {
           await this.startLiveEventInDistrict(location, slot);
         }
-      } else if (now - current.startedAt >= current.durationMs) {
-        // L'événement a atteint sa fin artificielle : le clôturer avec bilan et émargement final
-        await this.finishLiveEvent(current, location, slotKey);
       } else {
-        // Événement en cours : simuler l'activité en direct (nouveaux arrivants et pointage/émargement par le créateur)
-        await this.simulateLiveActivity(current, location, now);
+        await this.advanceEvent(slotKey, current, location, now);
       }
     }
   }
 
+  /** Fait avancer un événement en cours : clôture s'il a atteint sa fin, sinon activité en direct. */
+  private async advanceEvent(
+    slotKey: string,
+    current: ActiveDistrictEvent,
+    location: ParisLocation,
+    now: number,
+  ): Promise<void> {
+    if (now - current.startedAt >= current.durationMs) {
+      // L'événement a atteint sa fin artificielle : le clôturer avec bilan et émargement final
+      await this.finishLiveEvent(current, location, slotKey);
+    } else {
+      // Événement en cours : simuler l'activité en direct (nouveaux arrivants et pointage/émargement par le créateur)
+      await this.simulateLiveActivity(current, location, now);
+    }
+  }
+
+  /**
+   * Fait avancer tous les événements actifs sans en créer (instance dont les événements sont posés
+   * à la demande avec `spawnAt`, hors des slots d'arrondissement).
+   */
+  async tickActive(): Promise<void> {
+    const now = Date.now();
+    const entries = [...this.activeEvents.entries()];
+    for (let i = 0; i < entries.length; i += this.parallelBatchSize) {
+      await Promise.allSettled(
+        entries
+          .slice(i, i + this.parallelBatchSize)
+          .map(([slotKey, event]) => this.advanceEvent(slotKey, event, event.location, now)),
+      );
+    }
+  }
+
+  /**
+   * Démarre un événement en direct à une position donnée, hors invariant d'arrondissement.
+   * Retourne vrai si l'événement a bien été créé et suivi.
+   */
+  async spawnAt(location: ParisLocation): Promise<boolean> {
+    const slotKey = `at-${++this.spawnSeq}`;
+    await this.startLiveEvent(location, slotKey, 1);
+    return this.activeEvents.has(slotKey);
+  }
+
   private async startLiveEventInDistrict(districtBase: ParisLocation, slot: number): Promise<void> {
-    const slotKey = `${districtBase.district}-${slot}`;
     // Sélectionne une adresse réaliste et dispersée au sein de l'arrondissement pour éviter tout chevauchement
     const location = getRandomLocationForDistrict(districtBase.district, slot);
+    await this.startLiveEvent(location, `${districtBase.district}-${slot}`, slot);
+  }
+
+  private async startLiveEvent(location: ParisLocation, slotKey: string, slot: number): Promise<void> {
     const organizer = this.pool.pickOrganizer();
     const blueprint = generateEventBlueprint();
     const themeKey = detectTheme(blueprint.title);
@@ -190,9 +232,8 @@ export class ParisLiveEngine {
       lastAttendanceCheckAt: Date.now(),
     });
 
-    const totalTarget = PARIS_DISTRICTS.length * this.eventsPerDistrict;
     console.log(
-      `[ParisLiveEngine] ✅ Event [${location.postalCode}#${slot}] LIVE (${this.activeEvents.size}/${totalTarget} total) avec ${participants.length} bénévoles (${checkedInUserIds.size} pointés)`,
+      `[ParisLiveEngine] ✅ Event [${location.postalCode}#${slot}] LIVE (${this.activeCount(location)} total) avec ${participants.length} bénévoles (${checkedInUserIds.size} pointés)`,
     );
   }
 
@@ -314,10 +355,15 @@ export class ParisLiveEngine {
 
     // 4. Retirer de la liste active -> au prochain tick, ce slot prendra le relais
     this.activeEvents.delete(slotKey);
-    const totalTarget = PARIS_DISTRICTS.length * this.eventsPerDistrict;
     console.log(
-      `[ParisLiveEngine] 🔄 Slot [${location.postalCode}#${event.slot}] libéré (${this.activeEvents.size}/${totalTarget} actifs).`,
+      `[ParisLiveEngine] 🔄 Slot [${location.postalCode}#${event.slot}] libéré (${this.activeCount(location)} actifs).`,
     );
+  }
+
+  /** `actifs/cible` pour l'invariant des arrondissements ; simple compte pour les events posés à la demande. */
+  private activeCount(location: ParisLocation): string {
+    if (location.district === OFF_GRID_DISTRICT) return String(this.activeEvents.size);
+    return `${this.activeEvents.size}/${PARIS_DISTRICTS.length * this.eventsPerDistrict}`;
   }
 
   /** Active ou coupe la creation de nouveaux events (les events en cours se terminent normalement). */

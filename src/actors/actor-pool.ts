@@ -1,7 +1,7 @@
 import { fakerFR as faker } from '@faker-js/faker';
 import type { ApiClient, UserAuthCredentials } from '../clients/api-client.js';
 import { isExpiringWithin } from '../auth/token-expiry.js';
-import { buildActorIdentities } from './actor-identity.js';
+import { buildActorIdentities, type IdentityOptions } from './actor-identity.js';
 
 export type PoolApi = Pick<
   ApiClient,
@@ -19,11 +19,24 @@ export class ActorPool {
   private renewalStats = { refresh: 0, login: 0, failed: 0 };
   private renewalLogTimer?: ReturnType<typeof setTimeout>;
 
+  /** Autres pools de simulateurs : leurs acteurs ne sont pas de vrais utilisateurs. */
+  private peers: ActorPool[] = [];
+
   constructor(
     private readonly client: PoolApi,
     private readonly loginRetryDelayMs: number = 800,
+    private readonly identityOptions: IdentityOptions = {},
   ) {
     this.client.setTokenRefresher((staleToken) => this.renewSession(staleToken));
+  }
+
+  /** Declare un autre pool comme simule (ex. acteurs locaux), pour `isSimulatedUser`. */
+  addPeer(peer: ActorPool): void {
+    if (peer !== this && !this.peers.includes(peer)) this.peers.push(peer);
+  }
+
+  private ownsActor(userId: string): boolean {
+    return this.actors.some((a) => a.id === userId);
   }
 
   /**
@@ -46,7 +59,7 @@ export class ActorPool {
     const CONCURRENCY_LIMIT = 20;
     const organizerCount = Math.max(5, Math.floor(targetCount * 0.25));
     const roleOf = (idx: number): 'ORGANIZER' | 'VOLUNTEER' => (idx < organizerCount ? 'ORGANIZER' : 'VOLUNTEER');
-    const identities = buildActorIdentities(targetCount, roleOf);
+    const identities = buildActorIdentities(targetCount, roleOf, this.identityOptions);
     const indices = Array.from({ length: targetCount }, (_, i) => i);
     const password = 'Password123!Secure';
     let connected = 0;
@@ -342,11 +355,11 @@ export class ActorPool {
 
   isSimulatedUser(userId?: string): boolean {
     if (!userId) return false;
-    return this.actors.some((a) => a.id === userId);
+    return this.ownsActor(userId) || this.peers.some((peer) => peer.ownsActor(userId));
   }
 
   getSimulatedUserIds(): Set<string> {
-    return new Set(this.actors.map((a) => a.id));
+    return new Set([...this.actors, ...this.peers.flatMap((peer) => peer.actors)].map((a) => a.id));
   }
 
   getRandomActor(excludeId?: string): UserAuthCredentials {

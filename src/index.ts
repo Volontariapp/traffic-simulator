@@ -4,11 +4,16 @@ import { ActorPool } from './actors/actor-pool.js';
 import { ParisLiveEngine } from './engines/paris-live.engine.js';
 import { MassEventsEngine } from './engines/mass-events.engine.js';
 import { UserReactionEngine } from './engines/user-reaction.engine.js';
+import { LocalEventsEngine } from './engines/local-events.engine.js';
+import { LOCAL_SEED_OFFSET, localEmailForIndex, reservedMainPseudos } from './actors/actor-identity.js';
+import { createNominatimGeocoder } from './geo/reverse-geocoder.js';
+import { buildCenterProvider } from './geo/center-provider.js';
+import { createActiveLocationsSource } from './clients/active-locations.source.js';
 import { loadConfig } from './config/simulator-config.js';
 import { getSleepPhase } from './schedule/sleep-window.js';
 
 const config = loadConfig();
-const { sleep, reaction } = config;
+const { sleep, reaction, local } = config;
 
 console.log('====================================================');
 console.log('Volontariapp Live Traffic Simulator (Daemon)');
@@ -26,6 +31,14 @@ console.log(
 console.log(
   `Fenetre de sommeil    : ${
     sleep.enabled ? `${sleep.startHour}h-${sleep.endHour}h (${sleep.timeZone}), vidage ${sleep.drainSec}s avant` : 'desactivee'
+  }`,
+);
+const autoDiscovery = Boolean(local.adminEmail && local.adminPassword);
+console.log(
+  `Events autour des users: ${
+    local.centers.length > 0 || autoDiscovery
+      ? `${local.centers.length} centre(s) fixe(s)${autoDiscovery ? ' + positions des utilisateurs reels (compte admin)' : ''}, rayon ${local.radiusMeters} m, ${local.eventsMin}-${local.eventsMax} events/vague/centre toutes les ${local.intervalMs / 1000}s, ${local.actors} acteurs locaux`
+      : 'desactive (ni LOCAL_CENTERS ni SIMULATOR_ADMIN_EMAIL/PASSWORD)'
   }`,
 );
 console.log('====================================================');
@@ -67,6 +80,27 @@ async function bootstrap() {
     process.exit(1);
   }
 
+  // 1 bis. Pool des "gens du coin" : client API propre (un seul rafraichisseur de token par client)
+  const localEnabled = local.centers.length > 0 || autoDiscovery;
+  const localClient = new ApiClient(config.apiGatewayUrl);
+  const localUploader = new MediaUploader(config.apiGatewayUrl);
+  const localPool = new ActorPool(localClient, 800, {
+    emailFor: localEmailForIndex,
+    seedOffset: LOCAL_SEED_OFFSET,
+    reservedPseudos: reservedMainPseudos(),
+    localBios: true,
+  });
+  localUploader.setTokenRefresher((staleToken) => localPool.renewSession(staleToken));
+  if (localEnabled) {
+    await localPool.initialize(local.actors, config.actorBatchPauseMs, config.forceIdentitySync);
+    if (localPool.getAllActors().length === 0) {
+      console.error('Echec initialisation des acteurs locaux : la fonction reste inactive.');
+    }
+    // Leurs posts et events ne sont pas ceux de vrais utilisateurs : aucune reaction automatique dessus
+    actorPool.addPeer(localPool);
+  }
+  const localActive = localEnabled && localPool.getAllActors().length > 0;
+
   // 2. Initialisation des moteurs
   const parisLiveEngine = new ParisLiveEngine(
     apiClient,
@@ -75,6 +109,32 @@ async function bootstrap() {
     config.eventLifespanSec,
     config.eventsPerDistrict,
     config.parallelDistrictBatch,
+  );
+  const localLiveEngine = new ParisLiveEngine(
+    localClient,
+    localPool,
+    localUploader,
+    local.eventLifespanSec,
+    1,
+    config.parallelDistrictBatch,
+  );
+  const localEventsEngine = new LocalEventsEngine(
+    localLiveEngine,
+    createNominatimGeocoder({ userAgent: local.geocoderUserAgent }),
+    buildCenterProvider({
+      staticCenters: local.centers,
+      radiusMeters: local.radiusMeters,
+      maxCenters: local.maxCenters,
+      discover:
+        autoDiscovery && local.adminEmail && local.adminPassword
+          ? createActiveLocationsSource(apiClient, {
+              email: local.adminEmail,
+              password: local.adminPassword,
+              maxAgeMinutes: local.activeMaxAgeMinutes,
+            })
+          : undefined,
+    }),
+    local,
   );
   const massEventsEngine = new MassEventsEngine(apiClient, actorPool);
   const userReactionEngine = new UserReactionEngine(apiClient, actorPool, reaction);
@@ -85,6 +145,13 @@ async function bootstrap() {
     marginMs: config.tokenRefreshAheadMs,
     canRun: () => getSleepPhase(new Date(), sleep) !== 'asleep',
   });
+  if (localActive) {
+    localPool.startTokenKeepAlive({
+      intervalMs: config.tokenCheckIntervalMs,
+      marginMs: config.tokenRefreshAheadMs,
+      canRun: () => getSleepPhase(new Date(), sleep) !== 'asleep',
+    });
+  }
 
   // 3. Peuplement initial de masse si active
   if (config.initialMassSeed) {
@@ -106,6 +173,7 @@ async function bootstrap() {
           console.log('[Daemon] Entree dans la fenetre de sommeil : cloture des events et mise en pause.');
           userReactionEngine.reset();
           await parisLiveEngine.finishAllActive();
+          await localLiveEngine.finishAllActive();
         }
         await waitWhileRunning(30_000);
         continue;
@@ -115,6 +183,7 @@ async function bootstrap() {
         wasAsleep = false;
         console.log('[Daemon] Reveil : rafraichissement des sessions.');
         await actorPool.refreshAllTokens();
+        if (localActive) await localPool.refreshAllTokens();
       }
 
       parisLiveEngine.setSpawnEnabled(phase === 'awake');
@@ -146,8 +215,27 @@ async function bootstrap() {
     console.log('[Daemon] Boucle de reaction arretee.');
   };
 
+  const localLoop = async () => {
+    while (isRunning) {
+      const phase = getSleepPhase(new Date(), sleep);
+      // Meme garde que la boucle des arrondissements : rien pendant le sommeil ni juste apres le reveil
+      if (phase === 'asleep' || wasAsleep) {
+        await waitWhileRunning(5_000);
+        continue;
+      }
+      try {
+        await localEventsEngine.tick(phase === 'awake');
+      } catch (err) {
+        console.error('[Daemon] Erreur dans la boucle des events locaux :', err instanceof Error ? err.message : String(err));
+      }
+      await waitWhileRunning(config.tickIntervalMs);
+    }
+    console.log('[Daemon] Boucle des events locaux arretee.');
+  };
+
   void liveLoop();
   void reactionLoop();
+  if (localActive) void localLoop();
 }
 
 function handleShutdown(signal: string) {

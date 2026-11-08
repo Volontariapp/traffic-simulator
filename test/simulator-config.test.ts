@@ -43,4 +43,58 @@ describe('loadConfig', () => {
     assert.throws(() => loadConfig({ TARGET_ACTORS: 'abc' }), /TARGET_ACTORS/);
     assert.throws(() => loadConfig({ SLEEP_START_HOUR: '30' }), /SLEEP_START_HOUR/);
   });
+
+  it('desactive les events locaux par defaut', () => {
+    const { local } = loadConfig({});
+    assert.deepEqual(local.centers, []);
+    assert.equal(local.actors, 40);
+    assert.equal(local.radiusMeters, 2000);
+    assert.equal(local.intervalMs, 300_000);
+    assert.equal(local.eventsMin, 1);
+    assert.equal(local.eventsMax, 2);
+  });
+
+  it('lit les centres et reglages locaux depuis l environnement', () => {
+    const { local } = loadConfig({
+      LOCAL_CENTERS: '48.8566,2.3522;45.764,4.8357',
+      LOCAL_ACTORS: '60',
+      LOCAL_RADIUS_METERS: '1500',
+      LOCAL_EVENTS_INTERVAL_SEC: '120',
+      LOCAL_EVENTS_MIN: '2',
+      LOCAL_EVENTS_MAX: '3',
+    });
+    assert.equal(local.centers.length, 2);
+    assert.equal(local.actors, 60);
+    assert.equal(local.radiusMeters, 1500);
+    assert.equal(local.intervalMs, 120_000);
+    assert.equal(local.eventsMin, 2);
+    assert.equal(local.eventsMax, 3);
+  });
+
+  it('refuse des reglages locaux invalides', () => {
+    assert.throws(() => loadConfig({ LOCAL_CENTERS: '48.8566' }), /LOCAL_CENTERS/);
+    assert.throws(() => loadConfig({ LOCAL_EVENTS_MIN: '0' }), /LOCAL_EVENTS_MIN/);
+    assert.throws(() => loadConfig({ LOCAL_EVENTS_MIN: '3', LOCAL_EVENTS_MAX: '1' }), /LOCAL_EVENTS_MAX/);
+  });
+
+  it('lit le compte admin et les reglages de decouverte', () => {
+    const { local } = loadConfig({
+      SIMULATOR_ADMIN_EMAIL: ' sim-admin@simulator.test ',
+      SIMULATOR_ADMIN_PASSWORD: 'secret',
+      LOCAL_MAX_CENTERS: '4',
+      LOCAL_ACTIVE_MAX_AGE_MIN: '15',
+    });
+    assert.equal(local.adminEmail, 'sim-admin@simulator.test');
+    assert.equal(local.adminPassword, 'secret');
+    assert.equal(local.maxCenters, 4);
+    assert.equal(local.activeMaxAgeMinutes, 15);
+  });
+
+  it('n active pas la decouverte sans compte admin complet', () => {
+    const { local } = loadConfig({});
+    assert.equal(local.adminEmail, undefined);
+    assert.equal(local.adminPassword, undefined);
+    assert.equal(local.maxCenters, 10);
+    assert.equal(local.activeMaxAgeMinutes, 30);
+  });
 });
