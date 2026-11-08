@@ -1,4 +1,5 @@
 import type { LocalConfig } from '../config/simulator-config.js';
+import type { CenterProvider, LocalCenter } from '../geo/center-provider.js';
 import { randomPointInRadius } from '../geo/local-area.js';
 import { OFF_GRID_DISTRICT, type ParisLocation } from '../geo/paris-districts.js';
 import type { ReverseGeocoder } from '../geo/reverse-geocoder.js';
@@ -22,7 +23,8 @@ export class LocalEventsEngine {
   constructor(
     private readonly spawner: LocalEventSpawner,
     private readonly geocode: ReverseGeocoder,
-    private readonly config: LocalConfig,
+    private readonly centers: CenterProvider,
+    private readonly config: Pick<LocalConfig, 'intervalMs' | 'eventsMin' | 'eventsMax'>,
     private readonly rng: () => number = Math.random,
     private readonly now: () => number = Date.now,
   ) {}
@@ -33,7 +35,7 @@ export class LocalEventsEngine {
    */
   async tick(spawnEnabled: boolean): Promise<void> {
     const now = this.now();
-    if (spawnEnabled && this.config.centers.length > 0 && now >= this.nextWaveAt) {
+    if (spawnEnabled && now >= this.nextWaveAt) {
       this.nextWaveAt = now + this.config.intervalMs;
       await this.runWave();
     }
@@ -41,7 +43,8 @@ export class LocalEventsEngine {
   }
 
   private async runWave(): Promise<void> {
-    const { centers, eventsMin, eventsMax } = this.config;
+    const { eventsMin, eventsMax } = this.config;
+    const centers = await this.centers();
     for (const center of centers) {
       const count = eventsMin + Math.floor(this.rng() * (eventsMax - eventsMin + 1));
       let created = 0;
@@ -49,14 +52,14 @@ export class LocalEventsEngine {
         if (await this.spawnOne(center)) created++;
       }
       console.log(
-        `[LocalEventsEngine] Vague autour de ${center.lat},${center.lng} : ${created}/${count} events crees (rayon ${this.config.radiusMeters} m).`,
+        `[LocalEventsEngine] Vague autour de ${center.lat},${center.lng} : ${created}/${count} events crees (rayon ${center.radiusMeters} m).`,
       );
     }
   }
 
-  private async spawnOne(center: { lat: number; lng: number }): Promise<boolean> {
+  private async spawnOne(center: LocalCenter): Promise<boolean> {
     for (let attempt = 0; attempt < MAX_GEOCODE_ATTEMPTS; attempt++) {
-      const point = randomPointInRadius(center, this.config.radiusMeters, this.rng);
+      const point = randomPointInRadius(center, center.radiusMeters, this.rng);
       const place = await this.geocode(point);
       if (!place) continue;
 

@@ -9,6 +9,8 @@ export function buildLocalConfig(overrides: Partial<LocalConfig> = {}): LocalCon
     eventsMin: 1,
     eventsMax: 2,
     eventLifespanSec: 900,
+    maxCenters: 10,
+    activeMaxAgeMinutes: 30,
     geocoderUserAgent: 'TestAgent/1.0',
     ...overrides,
   };
