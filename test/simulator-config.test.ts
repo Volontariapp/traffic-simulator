@@ -97,4 +97,45 @@ describe('loadConfig', () => {
     assert.equal(local.maxCenters, 10);
     assert.equal(local.activeMaxAgeMinutes, 30);
   });
+
+  it('applique les valeurs par defaut du graphe, de l activite de fond et des followers reels', () => {
+    const config = loadConfig({});
+    assert.deepEqual(config.social, {
+      enabled: true,
+      followsMin: 5,
+      followsMax: 30,
+      reciprocity: 0.3,
+      concurrency: 10,
+      pauseMs: 500,
+      forceSync: false,
+    });
+    assert.equal(config.ambient.actionsPerSec, 8);
+    assert.equal(config.ambient.commentRatio, 0.15);
+    assert.equal(config.ambient.burstSize, 0);
+    assert.equal(config.ambient.maxConcurrency, 250);
+    assert.equal(config.realUsers.followersMin, 6);
+    assert.equal(config.realUsers.followersMax, 15);
+    assert.equal(config.realUsers.includeExisting, true);
+  });
+
+  it('lit une rafale de 1000 actions depuis l environnement', () => {
+    const config = loadConfig({
+      AMBIENT_BURST_SIZE: '1000',
+      AMBIENT_BURST_INTERVAL_MIN: '45',
+      AMBIENT_MAX_CONCURRENCY: '400',
+      AMBIENT_COMMENT_PERCENT: '20',
+      REAL_USERS_SCAN_INTERVAL_SEC: '60',
+    });
+    assert.equal(config.ambient.burstSize, 1000);
+    assert.equal(config.ambient.burstIntervalMs, 45 * 60_000);
+    assert.equal(config.ambient.maxConcurrency, 400);
+    assert.equal(config.ambient.commentRatio, 0.2);
+    assert.equal(config.realUsers.scanIntervalMs, 60_000);
+  });
+
+  it('refuse un pourcentage hors bornes et des fourchettes inversees', () => {
+    assert.throws(() => loadConfig({ AMBIENT_COMMENT_PERCENT: '120' }), /AMBIENT_COMMENT_PERCENT/);
+    assert.throws(() => loadConfig({ SOCIAL_FOLLOWS_MIN: '20', SOCIAL_FOLLOWS_MAX: '5' }), /SOCIAL_FOLLOWS_MAX/);
+    assert.throws(() => loadConfig({ REAL_FOLLOWERS_MIN: '9', REAL_FOLLOWERS_MAX: '3' }), /REAL_FOLLOWERS_MAX/);
+  });
 });

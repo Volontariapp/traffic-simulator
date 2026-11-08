@@ -32,6 +32,47 @@ export interface LocalConfig {
   activeMaxAgeMinutes: number;
 }
 
+export interface SocialConfig {
+  /** Graphe de follow entre acteurs du pool principal. */
+  enabled: boolean;
+  followsMin: number;
+  followsMax: number;
+  /** Part (0 a 1) des cibles qui suivent en retour. */
+  reciprocity: number;
+  /** Appels de follow simultanes pendant la construction du graphe. */
+  concurrency: number;
+  /** Pause entre deux lots de follows (evite de saturer ms-social et Neo4j). */
+  pauseMs: number;
+  /** Verifie tout le plan meme si les liens sentinelles existent deja. */
+  forceSync: boolean;
+}
+
+export interface AmbientConfig {
+  /** Likes et commentaires de fond sur les posts des simulateurs. */
+  enabled: boolean;
+  /** Debit continu d'actions par seconde. */
+  actionsPerSec: number;
+  /** Part (0 a 1) des actions qui sont des commentaires. */
+  commentRatio: number;
+  maxLikesPerPost: number;
+  maxCommentsPerPost: number;
+  /** Rafale de `burstSize` actions toutes les `burstIntervalMs` (0 : pas de rafale). */
+  burstSize: number;
+  burstIntervalMs: number;
+  /** Appels simultanes maximum, rafales comprises. */
+  maxConcurrency: number;
+}
+
+export interface RealUsersConfig {
+  /** Quelques acteurs suivent chaque vrai compte decouvert (necessite le compte ADMIN). */
+  enabled: boolean;
+  scanIntervalMs: number;
+  followersMin: number;
+  followersMax: number;
+  /** Suit aussi les comptes deja presents au demarrage (sinon seuls les nouveaux). */
+  includeExisting: boolean;
+}
+
 export interface SimulatorConfig {
   apiGatewayUrl: string;
   tickIntervalMs: number;
@@ -50,6 +91,9 @@ export interface SimulatorConfig {
   reaction: ReactionConfig;
   sleep: SleepConfig;
   local: LocalConfig;
+  social: SocialConfig;
+  ambient: AmbientConfig;
+  realUsers: RealUsersConfig;
 }
 
 type Env = Record<string, string | undefined>;
@@ -78,6 +122,14 @@ function readBool(env: Env, key: string, fallback: boolean): boolean {
   return raw.trim().toLowerCase() === 'true';
 }
 
+function readPercent(env: Env, key: string, fallback: number): number {
+  const value = readInt(env, key, fallback, 0);
+  if (value > 100) {
+    throw new Error(`Variable ${key} invalide : "${value}" (0 a 100 attendu)`);
+  }
+  return value / 100;
+}
+
 function readRange(env: Env, minKey: string, maxKey: string, minFallback: number, maxFallback: number) {
   const min = readInt(env, minKey, minFallback, 0);
   const max = readInt(env, maxKey, maxFallback, 0);
@@ -95,6 +147,9 @@ export function loadConfig(env: Env = process.env): SimulatorConfig {
   if (localEvents.min < 1) {
     throw new Error(`LOCAL_EVENTS_MIN (${localEvents.min}) doit etre >= 1`);
   }
+
+  const follows = readRange(env, 'SOCIAL_FOLLOWS_MIN', 'SOCIAL_FOLLOWS_MAX', 5, 30);
+  const followers = readRange(env, 'REAL_FOLLOWERS_MIN', 'REAL_FOLLOWERS_MAX', 6, 15);
 
   const timeZone = env.SLEEP_TIMEZONE?.trim() || 'Europe/Paris';
   try {
@@ -144,6 +199,32 @@ export function loadConfig(env: Env = process.env): SimulatorConfig {
       adminEmail: env.SIMULATOR_ADMIN_EMAIL?.trim() || undefined,
       adminPassword: env.SIMULATOR_ADMIN_PASSWORD || undefined,
       activeMaxAgeMinutes: readInt(env, 'LOCAL_ACTIVE_MAX_AGE_MIN', 30, 1),
+    },
+    social: {
+      enabled: readBool(env, 'SOCIAL_GRAPH_ENABLED', true),
+      followsMin: follows.min,
+      followsMax: follows.max,
+      reciprocity: readPercent(env, 'SOCIAL_RECIPROCITY_PERCENT', 30),
+      concurrency: readInt(env, 'SOCIAL_FOLLOW_CONCURRENCY', 10, 1),
+      pauseMs: readInt(env, 'SOCIAL_FOLLOW_PAUSE_MS', 500, 0),
+      forceSync: readBool(env, 'FORCE_SOCIAL_SYNC', false),
+    },
+    ambient: {
+      enabled: readBool(env, 'AMBIENT_ENABLED', true),
+      actionsPerSec: readInt(env, 'AMBIENT_ACTIONS_PER_SEC', 8, 0),
+      commentRatio: readPercent(env, 'AMBIENT_COMMENT_PERCENT', 15),
+      maxLikesPerPost: readInt(env, 'AMBIENT_MAX_LIKES_PER_POST', 150, 1),
+      maxCommentsPerPost: readInt(env, 'AMBIENT_MAX_COMMENTS_PER_POST', 25, 1),
+      burstSize: readInt(env, 'AMBIENT_BURST_SIZE', 0, 0),
+      burstIntervalMs: readInt(env, 'AMBIENT_BURST_INTERVAL_MIN', 30, 1) * 60_000,
+      maxConcurrency: readInt(env, 'AMBIENT_MAX_CONCURRENCY', 250, 1),
+    },
+    realUsers: {
+      enabled: readBool(env, 'REAL_FOLLOWERS_ENABLED', true),
+      scanIntervalMs: readInt(env, 'REAL_USERS_SCAN_INTERVAL_SEC', 120, 10) * 1000,
+      followersMin: followers.min,
+      followersMax: followers.max,
+      includeExisting: readBool(env, 'REAL_FOLLOW_EXISTING', true),
     },
   };
 }
