@@ -152,6 +152,13 @@ Coupez d'abord l'activite de fond du simulateur (`AMBIENT_ACTIONS_PER_SEC=0` ou 
 - Confirmation avant chaque palier (`LOAD_CONFIRM=false` pour la couper). Ctrl+C termine la fenetre en cours.
 - Chaque requete porte `X-Load-Test: 1` pour filtrer le trafic dans Datadog. Les horodatages de chaque palier sont dans le rapport.
 
+**Mode app (lectures de toute l'application).** `LOAD_MODE=app` remplace les 5 routes de reference par les lectures que nativapp envoie vraiment, melange `app-v1` (`src/load/app/app-profile.ts`, poids hypothetiques a recaler sur Datadog) : accueil sur `GET /ranking/feed` et resume des likes (`POST /social/likes-summary`, une lecture), swipe sur `GET /ranking/events`, recherche d'events (repli du swipe et carte en direct), detail d'un event, participants, posts lies, commentaires, profils, `is-following`, listes personnelles, classement. Les routes de detail visent un post, un event ou un utilisateur vu dans une reponse precedente ; tant qu'aucun n'est connu, la requete part sur la liste qui en fournit et compte sous ce nom. Avant le premier palier, 5 acteurs lisent 4 listes (hors mesure) pour remplir ces identifiants. Les ecritures du profil ne sont pas encore executables. `LOAD_MODE=routes` (defaut) garde exactement les requetes de reference.
+
+```bash
+LOAD_MODE=app LOAD_STEPS="10" LOAD_STEP_SECONDS=60 yarn load
+LOAD_MODE=app LOAD_MIX="ranking-feed:3,likes-summary:2,me:1" yarn load   # sous-ensemble des routes d'app
+```
+
 **Demarrage a froid et montee rapide.** Par defaut, chaque palier part a plein debit et ses `LOAD_WARMUP_SECONDS` premieres secondes sont jetees. Pour mesurer ce que vivent les utilisateurs pendant une attaque, lire le debut a part :
 
 ```bash
@@ -168,6 +175,7 @@ Le debut de palier range chaque requete selon la seconde ou elle est partie (une
 | `LOAD_BASE_URL` | obligatoire | Gateway visee (aucune valeur par defaut) |
 | `LOAD_STEPS` | `50,100,200,400,800,1000` | Debits cibles en req/s |
 | `LOAD_STEP_SECONDS` / `LOAD_WARMUP_SECONDS` | `60` / `10` | Duree de mesure et echauffement par palier |
+| `LOAD_MODE` | `routes` | `routes` : 5 routes de reference ; `app` : lectures de nativapp (`app-v1`) |
 | `LOAD_RAMP_UP_SECONDS` | `0` | Montee lineaire de 0 au debit du palier, avant l'echauffement et hors statistiques (0 : plein debit des la premiere seconde) |
 | `LOAD_ONSET_SECONDS` | `0` | Lit a part les N premieres secondes du palier (montee et echauffement compris), avec une serie par seconde ; 0 : desactive |
 | `LOAD_ACTORS` | `200` | Comptes existants utilises (memes identites que le pool principal, aucun renommage) |

@@ -4,7 +4,7 @@ import { classify, StatsWindow, type Sample } from './latency-stats.js';
 import type { LoadConfig } from './load-config.js';
 import type { LoadSender } from './load-http.js';
 import { findLastHealthyRate, type LoadReport, type StepResult, type StopReason } from './load-report.js';
-import { buildTarget, pickRoute } from './load-request.js';
+import { createRoutesPlanner, type TargetPlanner } from './load-request.js';
 import { OnsetRecorder } from './onset-recorder.js';
 import { runAtRate, systemClock, type SchedulerClock } from './rate-scheduler.js';
 
@@ -12,6 +12,8 @@ export interface RunnerDeps {
   config: LoadConfig;
   actors: readonly UserAuthCredentials[];
   send: LoadSender;
+  /** Absent : mode `routes` construit depuis `config.mix` (comportement d'origine). */
+  planner?: TargetPlanner;
   log: (line: string) => void;
   shouldStop: () => boolean;
   /** Absent : aucune confirmation. Refus : la rampe s'arrete avant le palier. */
@@ -46,6 +48,7 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
     maxP95Ms: config.abortP95Ms,
     windowsRequired: config.abortWindows,
   });
+  const planner = deps.planner ?? createRoutesPlanner(config.mix, actors);
   const sink = new Sink();
   const steps: StepResult[] = [];
   const startedAt = nowIso();
@@ -55,7 +58,7 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
   let onset: OnsetRecorder | undefined;
 
   const fire = (): void => {
-    const route = pickRoute(config.mix, rng);
+    const route = planner.pick(rng);
     const firedAt = clock.now();
     // Rattache la requete au debut du palier en cours, meme si elle repond apres sa fin
     const onsetOfRequest = onset?.covers(firedAt) ? onset : undefined;
@@ -67,13 +70,14 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
       return;
     }
     const actor = actors[Math.floor(rng() * actors.length)];
-    const peer = actors[Math.floor(rng() * actors.length)];
-    const target = buildTarget(route, peer.id, rng);
+    const target = planner.build(route, actor, rng);
     inFlight += 1;
     void (async () => {
       try {
         const res = await deps.send(target, actor.accessToken);
-        const sample = { route, outcome: classify(res.status, res.timedOut), ms: res.ms };
+        planner.observe?.(target, res);
+        // Nom de la cible : une route d'app sans identifiant connu se replie sur sa liste
+        const sample = { route: target.route, outcome: classify(res.status, res.timedOut), ms: res.ms };
         sink.add(sample);
         onsetOfRequest?.add(sample, firedAt);
       } catch {
@@ -196,7 +200,8 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
     startedAt,
     endedAt: nowIso(),
     baseUrl: config.baseUrl,
-    mix: config.mix.map((m) => `${m.route}:${m.weight}`).join(','),
+    mode: config.mode,
+    mix: planner.describe(),
     stopReason,
     steps,
     ...(lastHealthyRate === undefined ? {} : { lastHealthyRate }),
