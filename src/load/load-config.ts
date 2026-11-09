@@ -22,7 +22,18 @@ export interface LoadConfig {
   /** Debits cibles successifs, en requetes par seconde. */
   steps: number[];
   stepSeconds: number;
+  /**
+   * Montee lineaire de 0 au debit du palier, avant l'echauffement (0 : debit plein des la premiere
+   * seconde, attaque brutale). Hors statistiques du palier, comme l'echauffement.
+   */
+  rampUpSeconds: number;
   warmupSeconds: number;
+  /**
+   * Debut de palier lu a part : les requetes lancees dans les N premieres secondes du palier
+   * (montee et echauffement compris) ont leurs propres statistiques et une serie par seconde.
+   * 0 : desactive. Sert a mesurer un demarrage a froid au lieu de le jeter.
+   */
+  onsetSeconds: number;
   /** Duree d'une fenetre de mesure : unite d'evaluation de l'arret automatique. */
   windowSeconds: number;
   actors: number;
@@ -120,7 +131,9 @@ export function loadLoadConfig(env: NodeJS.ProcessEnv = process.env): LoadConfig
     baseUrl: normalizeBaseUrl(baseUrl),
     steps: parseSteps(env.LOAD_STEPS ?? '50,100,200,400,800,1000'),
     stepSeconds: readNumber(env, 'LOAD_STEP_SECONDS', 60, positive, 'nombre de secondes > 0'),
+    rampUpSeconds: readNumber(env, 'LOAD_RAMP_UP_SECONDS', 0, (v) => v >= 0, 'nombre de secondes >= 0'),
     warmupSeconds: readNumber(env, 'LOAD_WARMUP_SECONDS', 10, (v) => v >= 0, 'nombre de secondes >= 0'),
+    onsetSeconds: readNumber(env, 'LOAD_ONSET_SECONDS', 0, (v) => Number.isInteger(v) && v >= 0, 'entier >= 0'),
     windowSeconds: readNumber(env, 'LOAD_WINDOW_SECONDS', 10, positive, 'nombre de secondes > 0'),
     actors: readNumber(env, 'LOAD_ACTORS', 200, (v) => Number.isInteger(v) && v >= 2, 'entier >= 2'),
     maxInFlight: readNumber(env, 'LOAD_MAX_IN_FLIGHT', 2000, (v) => Number.isInteger(v) && v > 0, 'entier > 0'),

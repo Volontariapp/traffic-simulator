@@ -1,5 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import type { WindowStats } from './latency-stats.js';
+import type { OnsetStats } from './onset-recorder.js';
 
 export type StopReason = 'completed' | 'abort-policy' | 'declined' | 'signal';
 
@@ -12,6 +13,10 @@ export interface StepResult {
   /** Requetes effectivement lancees (hors dropped) par seconde de mesure. */
   achievedRate: number;
   stats: WindowStats;
+  /** Duree de la montee lineaire, absente quand le palier part a plein debit. */
+  rampUpSeconds?: number;
+  /** Debut de palier lu a part (LOAD_ONSET_SECONDS), montee et echauffement compris. */
+  onset?: OnsetStats;
   abortReason?: string;
 }
 
@@ -49,6 +54,23 @@ export function renderMarkdown(report: LoadReport): string {
     lines.push(
       `| ${step.targetRate} | ${cell(step.achievedRate, 1)} | ${cell(stats.p50)} | ${cell(stats.p95)} | ${cell(stats.p99)} | ${cell(stats.errorRate * 100, 1)} | ${stats.outcomes.degraded} | ${stats.outcomes.shed} | ${step.dropped} | ${step.abortReason ? `ARRET : ${step.abortReason}` : 'ok'} |`,
     );
+  }
+  const withOnset = report.steps.filter((step) => step.onset !== undefined);
+  if (withOnset.length > 0) {
+    lines.push('');
+    lines.push('Debut de palier (requetes rangees par seconde de lancement) :');
+    lines.push('');
+    lines.push('| Cible (req/s) | Secondes | Requetes | p50 ms | p95 ms | p99 ms | Erreurs % | Pire seconde (p95) |');
+    lines.push('| ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- |');
+    for (const step of withOnset) {
+      const { onset } = step;
+      if (!onset) continue;
+      const worst = onset.series.reduce((a, b) => (b.p95 > a.p95 ? b : a), onset.series[0]);
+      const worstCell = worst ? `s${worst.second} : ${cell(worst.p95)} ms` : '-';
+      lines.push(
+        `| ${step.targetRate} | ${onset.seconds} | ${onset.stats.count} | ${cell(onset.stats.p50)} | ${cell(onset.stats.p95)} | ${cell(onset.stats.p99)} | ${cell(onset.stats.errorRate * 100, 1)} | ${worstCell} |`,
+      );
+    }
   }
   lines.push('');
   lines.push(

@@ -1,9 +1,15 @@
 import type { LoadRouteName, RouteWeight } from './load-config.js';
 
+export type LoadMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
 export interface LoadTarget {
   route: LoadRouteName;
   /** Chemin relatif a la base /api/v1, query comprise. */
   path: string;
+  /** Absent : GET (toutes les routes du mode `routes`). */
+  method?: LoadMethod;
+  /** Corps JSON, envoye avec `Content-Type: application/json`. */
+  body?: unknown;
 }
 
 /**
