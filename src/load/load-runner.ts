@@ -5,6 +5,7 @@ import type { LoadConfig } from './load-config.js';
 import type { LoadSender } from './load-http.js';
 import { findLastHealthyRate, type LoadReport, type StepResult, type StopReason } from './load-report.js';
 import { buildTarget, pickRoute } from './load-request.js';
+import { OnsetRecorder } from './onset-recorder.js';
 import { runAtRate, systemClock, type SchedulerClock } from './rate-scheduler.js';
 
 export interface RunnerDeps {
@@ -51,12 +52,18 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
   let inFlight = 0;
   let dropped = 0;
   let stopReason: StopReason = 'completed';
+  let onset: OnsetRecorder | undefined;
 
   const fire = (): void => {
     const route = pickRoute(config.mix, rng);
+    const firedAt = clock.now();
+    // Rattache la requete au debut du palier en cours, meme si elle repond apres sa fin
+    const onsetOfRequest = onset?.covers(firedAt) ? onset : undefined;
     if (inFlight >= config.maxInFlight) {
       dropped += 1;
-      sink.add({ route, outcome: 'dropped', ms: 0 });
+      const sample = { route, outcome: 'dropped' as const, ms: 0 };
+      sink.add(sample);
+      onsetOfRequest?.add(sample, firedAt);
       return;
     }
     const actor = actors[Math.floor(rng() * actors.length)];
@@ -66,9 +73,13 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
     void (async () => {
       try {
         const res = await deps.send(target, actor.accessToken);
-        sink.add({ route, outcome: classify(res.status, res.timedOut), ms: res.ms });
+        const sample = { route, outcome: classify(res.status, res.timedOut), ms: res.ms };
+        sink.add(sample);
+        onsetOfRequest?.add(sample, firedAt);
       } catch {
-        sink.add({ route, outcome: 'network-error', ms: 0 });
+        const sample = { route, outcome: 'network-error' as const, ms: 0 };
+        sink.add(sample);
+        onsetOfRequest?.add(sample, firedAt);
       } finally {
         inFlight -= 1;
       }
@@ -93,10 +104,23 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
 
     policy.reset();
     const stepStartedAt = nowIso();
-    deps.log(`[load] palier ${rate} req/s : debut ${stepStartedAt}, echauffement ${config.warmupSeconds} s`);
+    deps.log(
+      `[load] palier ${rate} req/s : debut ${stepStartedAt}, montee ${config.rampUpSeconds} s, echauffement ${config.warmupSeconds} s`,
+    );
 
     sink.aggregate = undefined;
     sink.current = new StatsWindow();
+    onset = config.onsetSeconds > 0 ? new OnsetRecorder(clock.now(), config.onsetSeconds) : undefined;
+    if (config.rampUpSeconds > 0) {
+      await runAtRate({
+        ratePerSec: rate,
+        durationMs: config.rampUpSeconds * 1000,
+        rampUpMs: config.rampUpSeconds * 1000,
+        fire,
+        shouldStop: deps.shouldStop,
+        clock,
+      });
+    }
     if (config.warmupSeconds > 0) {
       await runAtRate({
         ratePerSec: rate,
@@ -134,6 +158,8 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
 
     await drain();
     sink.aggregate = undefined;
+    const stepOnset = onset?.snapshot();
+    onset = undefined;
     const stepEndedAt = nowIso();
     if (windowsRun > 0) {
       steps.push({
@@ -144,6 +170,8 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
         dropped,
         achievedRate: (sent - dropped) / (windowsRun * config.windowSeconds),
         stats: aggregate.snapshot(),
+        ...(config.rampUpSeconds > 0 ? { rampUpSeconds: config.rampUpSeconds } : {}),
+        ...(stepOnset ? { onset: stepOnset } : {}),
         ...(abortReason ? { abortReason } : {}),
       });
     }

@@ -37,18 +37,22 @@ export function createSender(options: SenderOptions): LoadSender {
 
   return async (target, token) => {
     const url = `${options.baseUrl}${target.path}`;
+    const hasBody = target.body !== undefined;
+    const body = hasBody ? JSON.stringify(target.body) : undefined;
     const startedAt = now();
     try {
       const { response } = await fetchWithTokenRetry(
         (bearer) =>
           fetchFn(url, {
-            method: 'GET',
+            method: target.method ?? 'GET',
             headers: {
               ...options.extraHeaders,
               Authorization: `Bearer ${bearer}`,
               'X-Load-Test': '1',
               'User-Agent': 'volontariapp-load-ramp',
+              ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
             },
+            ...(hasBody ? { body } : {}),
             signal: AbortSignal.timeout(options.timeoutMs),
           }),
         token,

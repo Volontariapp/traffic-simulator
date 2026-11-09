@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { dueCount, runAtRate } from '../src/load/rate-scheduler.js';
+import { dueCount, plannedCount, runAtRate } from '../src/load/rate-scheduler.js';
 import { FakeClock } from './mocks/load-deps.mock.js';
 
 describe('dueCount', () => {
@@ -54,5 +54,30 @@ describe('runAtRate', () => {
       clock: new FakeClock(),
     });
     assert.ok(result.sent >= 50 && result.sent < 1000);
+  });
+});
+
+describe('montee lineaire', () => {
+  it('cumule l aire du triangle pendant la montee puis le debit plein', () => {
+    assert.equal(plannedCount(2000, 100, 4000), 50);
+    assert.equal(plannedCount(4000, 100, 4000), 200);
+    assert.equal(plannedCount(5000, 100, 4000), 300);
+  });
+
+  it('sans montee, plannedCount est le cumul a debit constant', () => {
+    assert.equal(plannedCount(1500, 100), 150);
+    assert.equal(dueCount(1000, 100, 0, 0), dueCount(1000, 100, 0));
+  });
+
+  it('emet la moitie du debit x duree sur une montee complete', async () => {
+    const result = await runAtRate({
+      ratePerSec: 100,
+      durationMs: 4000,
+      rampUpMs: 4000,
+      fire: () => undefined,
+      shouldStop: () => false,
+      clock: new FakeClock(),
+    });
+    assert.equal(result.sent, 200);
   });
 });

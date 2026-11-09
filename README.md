@@ -152,11 +152,24 @@ Coupez d'abord l'activite de fond du simulateur (`AMBIENT_ACTIONS_PER_SEC=0` ou 
 - Confirmation avant chaque palier (`LOAD_CONFIRM=false` pour la couper). Ctrl+C termine la fenetre en cours.
 - Chaque requete porte `X-Load-Test: 1` pour filtrer le trafic dans Datadog. Les horodatages de chaque palier sont dans le rapport.
 
+**Demarrage a froid et montee rapide.** Par defaut, chaque palier part a plein debit et ses `LOAD_WARMUP_SECONDS` premieres secondes sont jetees. Pour mesurer ce que vivent les utilisateurs pendant une attaque, lire le debut a part :
+
+```bash
+# attaque brutale : 0 a 200 req/s d'un coup, les 10 premieres secondes lues seconde par seconde
+LOAD_STEPS="200" LOAD_WARMUP_SECONDS=0 LOAD_ONSET_SECONDS=10 yarn load
+# montee rapide : 0 a 300 req/s en 5 s, puis 60 s de mesure
+LOAD_STEPS="300" LOAD_RAMP_UP_SECONDS=5 LOAD_WARMUP_SECONDS=0 LOAD_ONSET_SECONDS=15 yarn load
+```
+
+Le debut de palier range chaque requete selon la seconde ou elle est partie (une requete lancee a la seconde 2 qui repond en 8 s compte dans la seconde 2). Il apparait dans le tableau final (« Debut de palier ») et, seconde par seconde, dans `steps[].onset.series` du rapport JSON. L'arret automatique s'applique aussi pendant ce debut : pour laisser passer un depart lent, relever `LOAD_ABORT_WINDOWS` ou `LOAD_ABORT_P95_MS`.
+
 | Variable | Defaut | Role |
 | :--- | :--- | :--- |
 | `LOAD_BASE_URL` | obligatoire | Gateway visee (aucune valeur par defaut) |
 | `LOAD_STEPS` | `50,100,200,400,800,1000` | Debits cibles en req/s |
 | `LOAD_STEP_SECONDS` / `LOAD_WARMUP_SECONDS` | `60` / `10` | Duree de mesure et echauffement par palier |
+| `LOAD_RAMP_UP_SECONDS` | `0` | Montee lineaire de 0 au debit du palier, avant l'echauffement et hors statistiques (0 : plein debit des la premiere seconde) |
+| `LOAD_ONSET_SECONDS` | `0` | Lit a part les N premieres secondes du palier (montee et echauffement compris), avec une serie par seconde ; 0 : desactive |
 | `LOAD_ACTORS` | `200` | Comptes existants utilises (memes identites que le pool principal, aucun renommage) |
 | `LOAD_MIX` | `events-list:40,posts-list:30,me:20,is-following:10` | Routes et poids. Routes : `events-list`, `events-list-app`, `posts-list`, `me`, `is-following`. `events-list-app` ajoute les filtres de nativapp (`excludeBlockedUsers`, `excludeParticipatedByMe`, `excludeCreatedByMe`, `excludeWishedByMe`), qui coutent des appels pagines a ms-social : l'utiliser a la place de `events-list` pour une mesure fidele a l'application |
 | `LOAD_TIMEOUT_MS` | `10000` | Delai par requete |
