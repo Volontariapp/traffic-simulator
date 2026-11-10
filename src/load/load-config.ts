@@ -5,6 +5,7 @@ import {
   isAppWriteRoute,
   type AppReadRoute,
 } from './app/app-profile.js';
+import { DEFAULT_WRITES, isExecutableWrite, type ExecutableWrite } from './app/write-planner.js';
 
 /**
  * `routes` : les 5 routes de reference, inchangees (comparables d'une rampe a l'autre).
@@ -32,7 +33,7 @@ export interface RouteWeight {
 }
 
 export interface AppRouteWeight {
-  route: AppReadRoute;
+  route: AppReadRoute | ExecutableWrite;
   weight: number;
 }
 
@@ -69,6 +70,10 @@ export interface LoadConfig {
   mix: RouteWeight[];
   /** Mode `app` : lectures de `app-v1`, ou `LOAD_MIX` avec des noms de routes d'app. */
   appMix: AppRouteWeight[];
+  /** Ecritures activees en mode app (`LOAD_WRITES`), toutes depuis le pool `load.NNNN`. */
+  writes: ExecutableWrite[];
+  /** Comptes du pool `load.NNNN` ouverts quand des ecritures sont activees. */
+  poolActors: number;
   /**
    * Jeton de service Cloudflare Access (memes variables que nativapp/.env). Vide : aucun en-tete.
    * Les valeurs ne sont jamais journalisees ni ecrites dans le rapport.
@@ -136,8 +141,44 @@ export function parseMode(raw: string | undefined): LoadMode {
   return mode;
 }
 
-/** `LOAD_MIX` du mode `app` : routes de lecture uniquement (les ecritures arrivent avec le pool load). */
-export function parseAppMix(raw: string): AppRouteWeight[] {
+/**
+ * `LOAD_WRITES` : absent ou `off`, lectures seules ; `default`, les ecritures invisibles des vrais
+ * utilisateurs (souhait, participation, follow, passe) ; sinon une liste de routes d'ecriture.
+ * Position et creation d'event sont refusees (exclues par decision).
+ */
+export function parseWrites(raw: string | undefined): ExecutableWrite[] {
+  const value = (raw ?? 'off').trim();
+  if (value === '' || value === 'off') return [];
+  if (value === 'default') return [...DEFAULT_WRITES];
+  const writes = value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
+    .flatMap((part) => (part === 'default' ? [...DEFAULT_WRITES] : [part]));
+  for (const name of writes) {
+    if (!isExecutableWrite(name)) {
+      throw new Error(
+        isAppWriteRoute(name)
+          ? `LOAD_WRITES : "${name}" est exclue de la rampe (position, creation d'event)`
+          : `LOAD_WRITES : "${name}" n'est pas une ecriture de l'app`,
+      );
+    }
+  }
+  return [...new Set(writes.filter(isExecutableWrite))];
+}
+
+/** Melange par defaut du mode app : lectures d'app-v1 et ecritures activees, poids du profil. */
+export function defaultAppMix(writes: readonly ExecutableWrite[]): AppRouteWeight[] {
+  const enabled = new Set<string>(writes);
+  const writeMix = APP_V1.filter((entry) => enabled.has(entry.route) && entry.weight > 0).flatMap((entry) =>
+    isExecutableWrite(entry.route) ? [{ route: entry.route, weight: entry.weight }] : [],
+  );
+  return [...executableMix(APP_V1), ...writeMix];
+}
+
+/** `LOAD_MIX` du mode `app` : une ecriture n'y est admise que si `LOAD_WRITES` l'active. */
+export function parseAppMix(raw: string, writes: readonly ExecutableWrite[] = []): AppRouteWeight[] {
+  const enabled = new Set<string>(writes);
   const mix = raw
     .split(',')
     .map((part) => part.trim())
@@ -145,10 +186,11 @@ export function parseAppMix(raw: string): AppRouteWeight[] {
     .map((part) => {
       const [name, weightRaw] = part.split(':');
       const weight = Number(weightRaw);
-      if (isAppWriteRoute(name)) {
-        throw new Error(`LOAD_MIX : "${name}" est une ecriture, pas encore executable en mode app`);
+      const isWrite = isExecutableWrite(name);
+      if (isAppWriteRoute(name) && !(isWrite && enabled.has(name))) {
+        throw new Error(`LOAD_MIX : "${name}" est une ecriture non activee (LOAD_WRITES)`);
       }
-      if (!isAppReadRoute(name) || !Number.isFinite(weight) || weight <= 0) {
+      if (!(isAppReadRoute(name) || isWrite) || !Number.isFinite(weight) || weight <= 0) {
         throw new Error(`LOAD_MIX entree "${part}" invalide en mode app : <route d'app>:<poids>`);
       }
       return { route: name, weight };
@@ -181,6 +223,10 @@ export function loadLoadConfig(env: NodeJS.ProcessEnv = process.env): LoadConfig
   const positive = (v: number) => v > 0;
   const mode = parseMode(env.LOAD_MODE);
   const rawMix = env.LOAD_MIX;
+  const writes = mode === 'app' ? parseWrites(env.LOAD_WRITES) : [];
+  if (mode !== 'app' && env.LOAD_WRITES !== undefined && parseWrites(env.LOAD_WRITES).length > 0) {
+    throw new Error('LOAD_WRITES ne vaut que pour LOAD_MODE=app');
+  }
   return {
     mode,
     baseUrl: normalizeBaseUrl(baseUrl),
@@ -198,7 +244,9 @@ export function loadLoadConfig(env: NodeJS.ProcessEnv = process.env): LoadConfig
     abortWindows: readNumber(env, 'LOAD_ABORT_WINDOWS', 2, (v) => Number.isInteger(v) && v > 0, 'entier > 0'),
     // Mode routes : lecture de LOAD_MIX strictement identique a la premiere version
     mix: parseMix(mode === 'routes' ? (rawMix ?? DEFAULT_MIX) : DEFAULT_MIX),
-    appMix: mode === 'app' && rawMix !== undefined ? parseAppMix(rawMix) : executableMix(APP_V1),
+    appMix: mode === 'app' && rawMix !== undefined ? parseAppMix(rawMix, writes) : defaultAppMix(writes),
+    writes,
+    poolActors: readNumber(env, 'LOAD_POOL_ACTORS', 200, (v) => Number.isInteger(v) && v >= 2, 'entier >= 2'),
     accessHeaders: parseAccessHeaders(env),
     confirmEachStep: (env.LOAD_CONFIRM ?? 'true').toLowerCase() !== 'false',
     reportPath: env.LOAD_REPORT_PATH?.trim() || 'load-report.json',

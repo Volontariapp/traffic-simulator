@@ -74,7 +74,7 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
     inFlight += 1;
     void (async () => {
       try {
-        const res = await deps.send(target, actor.accessToken);
+        const res = await deps.send(target, target.token ?? actor.accessToken);
         planner.observe?.(target, res);
         // Nom de la cible : une route d'app sans identifiant connu se replie sur sa liste
         const sample = { route: target.route, outcome: classify(res.status, res.timedOut), ms: res.ms };

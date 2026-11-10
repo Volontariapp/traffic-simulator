@@ -12,6 +12,7 @@ export function createFixtureApiMock(options: { nodeDelayPolls?: number } = {}) 
   const follows = new Map<string, Set<string>>();
   const wishes = new Map<string, Set<string>>();
   const joins = new Map<string, Set<string>>();
+  const posts = new Map<string, Set<string>>();
   let counter = 0;
   const setOf = (map: Map<string, Set<string>>, token: string): Set<string> => {
     let set = map.get(token);
@@ -48,6 +49,8 @@ export function createFixtureApiMock(options: { nodeDelayPolls?: number } = {}) 
     listMyFollowIds: mock.fn<FixtureApi['listMyFollowIds']>(async (token) => [...setOf(follows, token)]),
     unfollowUser: mock.fn<FixtureApi['unfollowUser']>(async (token, id) => setOf(follows, token).delete(id) || true),
     unwishEvent: mock.fn<FixtureApi['unwishEvent']>(async (token, id) => setOf(wishes, token).delete(id) || true),
+    listMyPostIds: mock.fn<FixtureApi['listMyPostIds']>(async (token) => [...setOf(posts, token)]),
+    deletePost: mock.fn<FixtureApi['deletePost']>(async (token, id) => setOf(posts, token).delete(id) || true),
     unparticipateEvent: mock.fn<FixtureApi['unparticipateEvent']>(
       async (token, id) => setOf(joins, token).delete(id) || true,
     ),
@@ -62,6 +65,7 @@ export function createFixtureApiMock(options: { nodeDelayPolls?: number } = {}) 
     follow: (token: string, id: string) => setOf(follows, token).add(id),
     wish: (token: string, id: string) => setOf(wishes, token).add(id),
     join: (token: string, id: string) => setOf(joins, token).add(id),
+    post: (token: string, id: string) => setOf(posts, token).add(id),
   };
   return { api, seed };
 }

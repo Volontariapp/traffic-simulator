@@ -81,14 +81,15 @@ describe('LoadFixtures.cleanup', () => {
     mock.seed.wish(a.accessToken, e1);
     mock.seed.wish(b.accessToken, 'real-event');
     mock.seed.join(c.accessToken, e2);
+    mock.seed.post(a.accessToken, 'load-post');
     return { ...mock, actors, fixtures };
   }
 
   it('dry-run : compte sans rien ecrire', async () => {
     const { api, fixtures } = await seeded();
     const report = await fixtures.cleanup({ dryRun: true, purgeEvents: false });
-    assert.deepEqual(report.found, { follows: 2, wishes: 1, participations: 1, events: 0 });
-    assert.deepEqual(report.foreign, { follows: 1, wishes: 1, participations: 0, events: 0 });
+    assert.deepEqual(report.found, { posts: 1, follows: 2, wishes: 1, participations: 1, events: 0 });
+    assert.deepEqual(report.foreign, { posts: 0, follows: 1, wishes: 1, participations: 0, events: 0 });
     assert.equal(api.unfollowUser.mock.callCount() + api.unwishEvent.mock.callCount(), 0);
     assert.equal(api.unparticipateEvent.mock.callCount(), 0);
   });
@@ -96,19 +97,20 @@ describe('LoadFixtures.cleanup', () => {
   it('retire tout ce qui appartient au pool, laisse le reste, et relit a zero', async () => {
     const { api, fixtures } = await seeded();
     const report = await fixtures.cleanup({ dryRun: false, purgeEvents: false });
-    assert.deepEqual(report.remaining, { follows: 0, wishes: 0, participations: 0, events: 0 });
+    assert.deepEqual(report.remaining, { posts: 0, follows: 0, wishes: 0, participations: 0, events: 0 });
     assert.equal(report.failures, 0);
     for (const call of api.unfollowUser.mock.calls) assert.notEqual(call.arguments[1], 'real-user');
     for (const call of api.unwishEvent.mock.calls) assert.notEqual(call.arguments[1], 'real-event');
     assert.equal(api.deleteEvent.mock.callCount(), 0);
+    assert.deepEqual(api.deletePost.mock.calls.map((c) => c.arguments[1]), ['load-post']);
   });
 
   it('se rejoue sans effet et purge les events sur demande', async () => {
     const { api, fixtures } = await seeded();
     await fixtures.cleanup({ dryRun: false, purgeEvents: false });
     const again = await fixtures.cleanup({ dryRun: false, purgeEvents: true });
-    assert.deepEqual(again.found, { follows: 0, wishes: 0, participations: 0, events: 2 });
-    assert.deepEqual(again.remaining, { follows: 0, wishes: 0, participations: 0, events: 0 });
+    assert.deepEqual(again.found, { posts: 0, follows: 0, wishes: 0, participations: 0, events: 2 });
+    assert.deepEqual(again.remaining, { posts: 0, follows: 0, wishes: 0, participations: 0, events: 0 });
     assert.equal(api.deleteEvent.mock.callCount(), 2);
   });
 });
