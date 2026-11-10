@@ -214,3 +214,24 @@ export function reservedLocalPseudos(): Set<string> {
     }).map((identity) => identity.pseudo),
   );
 }
+
+/**
+ * Email des comptes de la rampe de charge (ecritures) : un troisieme pool, distinct des acteurs
+ * principaux et locaux, pour que tout ce qu'il ecrit soit identifiable et nettoyable.
+ */
+export function loadEmailForIndex(index: number): string {
+  return `load.${String(index + 1).padStart(4, '0')}@simulator.volontariapp.test`;
+}
+
+/** Decalage de graine du pool de charge : au-dela des pools principal et local. */
+export const LOAD_SEED_OFFSET = 200_000;
+
+/** Options d'identite du pool de charge : ses pseudos evitent ceux des deux autres pools. */
+export function loadIdentityOptions(): IdentityOptions {
+  return {
+    emailFor: loadEmailForIndex,
+    seedOffset: LOAD_SEED_OFFSET,
+    reservedPseudos: new Set([...reservedMainPseudos(), ...reservedLocalPseudos()]),
+    localBios: true,
+  };
+}
