@@ -6,7 +6,7 @@ import type { LatencySummary } from '../src/load/latency-stats.js';
 const THRESHOLDS = { maxErrorRate: 0.05, maxP95Ms: 2000, windowsRequired: 2 };
 
 function summary(overrides: Partial<LatencySummary> = {}): LatencySummary {
-  return { count: 100, errors: 0, errorRate: 0, shedRate: 0, p50: 50, p95: 100, p99: 150, ...overrides };
+  return { count: 100, errors: 0, errorRate: 0, shedRate: 0, degraded: 0, clientErrors: 0, p50: 50, p95: 100, p99: 150, ...overrides };
 }
 
 describe('AbortPolicy', () => {

@@ -6,6 +6,7 @@ import { IdPool } from '../src/load/app/id-pool.js';
 import { loadLoadConfig, parseAppMix, parseMode } from '../src/load/load-config.js';
 import { createSender, type FetchLike, type LoadSender } from '../src/load/load-http.js';
 import { runRamp } from '../src/load/load-runner.js';
+import { renderMarkdown } from '../src/load/load-report.js';
 import { buildActors } from './factories/actor.factory.js';
 import { buildEvent, buildListResponse, buildPost } from './factories/app-response.factory.js';
 import { buildLoadConfig } from './factories/load-config.factory.js';
@@ -212,5 +213,61 @@ describe('runRamp en mode app', () => {
     assert.equal(byRoute['event-detail'].count, 9);
     assert.equal(report.mode, 'app');
     assert.match(report.mix, /^app-v1 lectures : event-detail:1$/);
+  });
+});
+
+describe('AppPlanner : localite par acteur', () => {
+  it('ouvre de preference un element de la derniere liste lue par le meme acteur', () => {
+    const actors = buildActors(2);
+    const p = new AppPlanner({ mix: executableMix(APP_V1), actors, nowMs: () => NOW });
+    const [a, b] = actors;
+    const listA = p.build('ranking-events', a, () => 0);
+    p.observe(listA, buildListResponse({ events: [buildEvent(1)] }));
+    const listB = p.build('ranking-events', b, () => 0);
+    p.observe(listB, buildListResponse({ events: [buildEvent(2), buildEvent(3)] }));
+    // tirages : page, puis localite (sous 0,7 : liste de l'acteur), puis l'element
+    assert.equal(p.build('event-detail', a, seq(0, 0.1, 0)).path, '/events/event-1');
+    assert.equal(p.build('event-detail', a, seq(0, 0.9, 0.99)).path, '/events/event-3');
+  });
+
+  it('le resume des likes porte sur les posts vus par l acteur', () => {
+    const actors = buildActors(2);
+    const p = new AppPlanner({ mix: executableMix(APP_V1), actors, nowMs: () => NOW });
+    p.observe(p.build('ranking-feed', actors[0], () => 0), buildListResponse({ posts: [buildPost(1)] }));
+    p.observe(p.build('ranking-feed', actors[1], () => 0), buildListResponse({ posts: [buildPost(2)] }));
+    const target = p.build('likes-summary', actors[0], Math.random);
+    assert.deepEqual(target.body, { postIds: ['post-1'] });
+  });
+});
+
+function seq(...values: number[]): () => number {
+  let i = 0;
+  return () => (i < values.length ? values[i++] : 0);
+}
+
+describe('rapport du mode app', () => {
+  it('ventile par route et par type', async () => {
+    const actors = buildActors(3);
+    const p = new AppPlanner({ mix: [{ route: 'me', weight: 1 }, { route: 'ranking-feed', weight: 1 }], actors, nowMs: () => NOW });
+    const send = mock.fn<LoadSender>(async (target) =>
+      target.route === 'ranking-feed' ? { status: 206, ms: 5, timedOut: false } : { status: 200, ms: 5, timedOut: false },
+    );
+    let draw = 0;
+    const report = await runRamp({
+      config: buildLoadConfig({ mode: 'app', steps: [10], stepSeconds: 1 }),
+      actors,
+      send,
+      planner: p,
+      log: () => undefined,
+      shouldStop: () => false,
+      clock: new FakeClock(),
+      rng: () => (draw++ % 2 === 0 ? 0.1 : 0.9),
+    });
+    const stats = report.steps[0].stats;
+    assert.equal(stats.byKind?.read.count, 10);
+    assert.ok(stats.byRoute['ranking-feed'].degraded > 0);
+    const text = renderMarkdown(report);
+    assert.match(text, /Palier 10 req\/s, par route/);
+    assert.match(text, /\| read \| 10 \|/);
   });
 });

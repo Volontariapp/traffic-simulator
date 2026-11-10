@@ -39,6 +39,10 @@ export interface LatencySummary {
   errorRate: number;
   /** Part de 429 : un rate limit repond vite, il ne fait ni erreur ni p95 mais invalide la mesure. */
   shedRate: number;
+  /** 206 (repli de la gateway, ex. liste de ranking pas encore calculee). */
+  degraded: number;
+  /** 4xx hors 429 : requete refusee (parametre, 404, 409 d'une bascule). */
+  clientErrors: number;
   p50: number;
   p95: number;
   p99: number;
@@ -47,6 +51,8 @@ export interface LatencySummary {
 export interface WindowStats extends LatencySummary {
   outcomes: Record<Outcome, number>;
   byRoute: Record<string, LatencySummary>;
+  /** Par type de requete (`read`, `write`), si le planificateur sait les distinguer. */
+  byKind?: Record<string, LatencySummary>;
 }
 
 /** Status 0 : pas de reponse (reseau ou delai). 206 : fallback de la gateway. 429 : delestage. */
@@ -70,11 +76,15 @@ function summarize(samples: readonly Sample[]): LatencySummary {
   const sorted = samples.map((s) => s.ms).sort((a, b) => a - b);
   const errors = samples.filter((s) => ERROR_OUTCOMES.has(s.outcome)).length;
   const shed = samples.filter((s) => s.outcome === 'shed').length;
+  const degraded = samples.filter((s) => s.outcome === 'degraded').length;
+  const clientErrors = samples.filter((s) => s.outcome === 'client-error').length;
   return {
     count: samples.length,
     errors,
     errorRate: samples.length === 0 ? 0 : errors / samples.length,
     shedRate: samples.length === 0 ? 0 : shed / samples.length,
+    degraded,
+    clientErrors,
     p50: percentile(sorted, 50),
     p95: percentile(sorted, 95),
     p99: percentile(sorted, 99),
@@ -88,7 +98,7 @@ export class StatsWindow {
     this.samples.push(sample);
   }
 
-  snapshot(): WindowStats {
+  snapshot(kindOf?: (route: string) => string): WindowStats {
     const outcomes = Object.fromEntries(OUTCOMES.map((o) => [o, 0])) as Record<Outcome, number>;
     const grouped = new Map<string, Sample[]>();
     for (const sample of this.samples) {
@@ -99,6 +109,16 @@ export class StatsWindow {
     }
     const byRoute: Record<string, LatencySummary> = {};
     for (const [route, list] of grouped) byRoute[route] = summarize(list);
-    return { ...summarize(this.samples), outcomes, byRoute };
+    if (!kindOf) return { ...summarize(this.samples), outcomes, byRoute };
+    const kinds = new Map<string, Sample[]>();
+    for (const sample of this.samples) {
+      const kind = kindOf(sample.route);
+      const list = kinds.get(kind);
+      if (list) list.push(sample);
+      else kinds.set(kind, [sample]);
+    }
+    const byKind: Record<string, LatencySummary> = {};
+    for (const [kind, list] of kinds) byKind[kind] = summarize(list);
+    return { ...summarize(this.samples), outcomes, byRoute, byKind };
   }
 }
