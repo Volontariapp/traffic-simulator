@@ -230,6 +230,74 @@ export class ApiClient {
     return res.status === 409 ? 'exists' : 'failed';
   }
 
+  /** Ne plus suivre `userId`. 404 (relation absente) compte comme fait : le nettoyage se rejoue. */
+  async unfollowUser(token: string, userId: string): Promise<boolean> {
+    const res = await this.request(`/social/follow/${userId}`, { method: 'DELETE' }, token, true);
+    return res.ok || res.status === 404;
+  }
+
+  /** Identifiants des comptes suivis par le compte authentifie (une page). undefined si echec. */
+  async listMyFollowIds(token: string, limit = 100): Promise<string[] | undefined> {
+    const q = `pagination[page]=1&pagination[limit]=${limit}`;
+    const res = await this.request<{ users?: Array<{ id?: string }> }>(
+      `/social/follows?${q}`,
+      { method: 'GET' },
+      token,
+      true,
+    );
+    if (!res.ok) return undefined;
+    return (res.data?.users ?? []).flatMap((user) => (user.id ? [user.id] : []));
+  }
+
+  /** Souhaite un event. 409 (deja souhaite) n'est pas une erreur. */
+  async wishEvent(token: string, eventId: string): Promise<'created' | 'exists' | 'failed'> {
+    const res = await this.request(`/social/events/${eventId}/wish`, { method: 'POST' }, token, true);
+    if (res.ok) return 'created';
+    return res.status === 409 ? 'exists' : 'failed';
+  }
+
+  /** Retire un souhait. 404 (absent) compte comme fait. */
+  async unwishEvent(token: string, eventId: string): Promise<boolean> {
+    const res = await this.request(`/social/events/${eventId}/wish`, { method: 'DELETE' }, token, true);
+    return res.ok || res.status === 404;
+  }
+
+  /** Quitte un event. 404 (participation absente) compte comme fait. */
+  async unparticipateEvent(token: string, eventId: string): Promise<boolean> {
+    const res = await this.request(`/social/events/${eventId}/participate`, { method: 'DELETE' }, token, true);
+    return res.ok || res.status === 404;
+  }
+
+  /**
+   * Identifiants des events crees, rejoints ou souhaites par le compte authentifie, lus dans le
+   * graphe social (aucun filtre d'etat : un event DRAFT y figure). undefined si echec.
+   */
+  async listMySocialEventIds(
+    token: string,
+    list: 'created' | 'participated' | 'wished',
+    limit = 100,
+  ): Promise<string[] | undefined> {
+    const res = await this.request<{ ids?: string[] }>(
+      `/social/events/${list}?pagination[page]=1&pagination[limit]=${limit}`,
+      { method: 'GET' },
+      token,
+      true,
+    );
+    return res.ok ? (res.data?.ids ?? []) : undefined;
+  }
+
+  /** Titre d'un event, lu par son organisateur (brouillon compris). undefined si absent ou refus. */
+  async getEventTitle(token: string, eventId: string): Promise<string | undefined> {
+    const res = await this.request<{ event?: { title?: string } }>(`/events/${eventId}`, { method: 'GET' }, token, true);
+    return res.ok ? res.data?.event?.title : undefined;
+  }
+
+  /** Le noeud social de l'event existe-t-il (cree en asynchrone apres la creation) ? */
+  async eventNodeExists(token: string, eventId: string): Promise<boolean> {
+    const res = await this.request(`/social/events/${eventId}`, { method: 'GET' }, token, true);
+    return res.ok;
+  }
+
   /** Le compte authentifie suit-il `userId` ? undefined si la lecture echoue. */
   async isFollowing(token: string, userId: string): Promise<boolean | undefined> {
     const res = await this.request<{ isFollowing?: boolean }>(

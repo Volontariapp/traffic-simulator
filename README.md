@@ -159,6 +159,17 @@ LOAD_MODE=app LOAD_STEPS="10" LOAD_STEP_SECONDS=60 yarn load
 LOAD_MODE=app LOAD_MIX="ranking-feed:3,likes-summary:2,me:1" yarn load   # sous-ensemble des routes d'app
 ```
 
+**Pool d'ecriture et nettoyage.** Les ecritures de la rampe ne partent que de comptes `load.NNNN@simulator.volontariapp.test` (troisieme pool, pseudos distincts des pools principal et local) et ne visent que des objets du pool : des events de fixture en DRAFT (prefixe `[charge] `, jamais publies, donc absents du ranking et des listes des vrais utilisateurs) et les autres comptes load.
+
+```bash
+yarn load:setup                  # cree les comptes absents et LOAD_FIXTURE_EVENTS events DRAFT (une fois)
+yarn load:cleanup --dry-run      # compte ce que le pool a ecrit, sans rien toucher
+yarn load:cleanup                # retire follows, souhaits et participations, puis relit tout (code 2 s'il reste quelque chose)
+yarn load:cleanup --purge        # retire aussi les events de fixture
+```
+
+Le nettoyage lit les listes du graphe social (`/social/follows`, `/social/events/{wished,participated}`), ne retire que les relations vers des objets du pool et signale les autres sans les toucher. Hors `setup`, un compte absent est ignore, jamais cree. Variables : `LOAD_POOL_ACTORS` (200), `LOAD_FIXTURE_EVENTS` (10), plus `LOAD_BASE_URL` et le jeton Cloudflare Access comme `yarn load`.
+
 **Demarrage a froid et montee rapide.** Par defaut, chaque palier part a plein debit et ses `LOAD_WARMUP_SECONDS` premieres secondes sont jetees. Pour mesurer ce que vivent les utilisateurs pendant une attaque, lire le debut a part :
 
 ```bash

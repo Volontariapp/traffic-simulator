@@ -26,6 +26,8 @@ export class ActorPool {
     private readonly client: PoolApi,
     private readonly loginRetryDelayMs: number = 800,
     private readonly identityOptions: IdentityOptions = {},
+    /** Faux : un compte absent n'est pas cree (lecture seule, ex. nettoyage de la rampe). */
+    private readonly createMissing: boolean = true,
   ) {
     this.client.setTokenRefresher((staleToken) => this.renewSession(staleToken));
   }
@@ -79,6 +81,7 @@ export class ActorPool {
           let created = false;
 
           // 2. Si le compte n'existe pas encore en base, le creer avec son identite finale
+          if (!auth.accessToken && !this.createMissing) return null;
           if (!auth.accessToken) {
             const signed = await this.client.signUp({ email, pseudo, password, bio });
             created = true;

@@ -11,6 +11,8 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "load": "tsx src/load.ts",
+    "load:setup": "tsx src/load-admin.ts setup",
+    "load:cleanup": "tsx src/load-admin.ts cleanup",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.test.json"
