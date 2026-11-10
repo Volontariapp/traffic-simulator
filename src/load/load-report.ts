@@ -4,6 +4,16 @@ import type { OnsetStats } from './onset-recorder.js';
 
 export type StopReason = 'completed' | 'abort-policy' | 'declined' | 'signal';
 
+/** Effets asynchrones d'un palier (sonde WebSocket). */
+export interface AsyncStepStats {
+  received: number;
+  lost: number;
+  lostRate: number;
+  /** p95 de la pire fenetre du palier. */
+  worstWindowP95: number;
+  max: number;
+}
+
 export interface StepResult {
   targetRate: number;
   startedAt: string;
@@ -17,6 +27,7 @@ export interface StepResult {
   rampUpSeconds?: number;
   /** Debut de palier lu a part (LOAD_ONSET_SECONDS), montee et echauffement compris. */
   onset?: OnsetStats;
+  async?: AsyncStepStats;
   abortReason?: string;
 }
 
@@ -92,6 +103,19 @@ export function renderMarkdown(report: LoadReport): string {
     );
   }
   if (report.mode === 'app') lines.push(...renderBreakdown(report.steps));
+  const withAsync = report.steps.filter((step) => step.async !== undefined);
+  if (withAsync.length > 0) {
+    lines.push('');
+    lines.push('Effets asynchrones (sonde WebSocket, ecriture acceptee -> message recu) :');
+    lines.push('');
+    lines.push('| Cible (req/s) | Recus | Perdus % | p95 pire fenetre ms | Max ms |');
+    lines.push('| ---: | ---: | ---: | ---: | ---: |');
+    for (const step of withAsync) {
+      const a = step.async;
+      if (!a) continue;
+      lines.push(`| ${step.targetRate} | ${a.received} | ${cell(a.lostRate * 100, 1)} | ${cell(a.worstWindowP95)} | ${cell(a.max)} |`);
+    }
+  }
   const withOnset = report.steps.filter((step) => step.onset !== undefined);
   if (withOnset.length > 0) {
     lines.push('');

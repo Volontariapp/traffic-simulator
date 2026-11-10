@@ -177,6 +177,8 @@ LOAD_MODE=app LOAD_WRITES=default LOAD_STEPS="10" LOAD_RAMP_UP_SECONDS=10 yarn l
 LOAD_MODE=app LOAD_WRITES=default,like-toggle,comment-cycle,post-cycle yarn load   # second passage
 ```
 
+**Sonde des effets asynchrones.** Quand `like-toggle` ou `comment-cycle` sont actives, les `LOAD_PROBE_SOCKETS` (20) premiers comptes load ouvrent un socket comme nativapp (`/api/v1/socket.io`, websocket). Chaque like ou commentaire accepte par la gateway attend son message `post.liked` ou `post.comment.created` adresse a l'emetteur (`isEmitter: true`) : le delai couvre outbox, Redis Stream, post-processor de ws-service et envoi. Par fenetre : recus, perdus (au-dela de `LOAD_PROBE_LOST_AFTER_MS`, 60 s), p50 et p95. Arret automatique si le p95 depasse `LOAD_ABORT_ASYNC_P95_MS` (30 s) ou si plus de `LOAD_ABORT_ASYNC_LOST_RATE` (2 %) des effets sont perdus, deux fenetres de suite. Les ecritures par defaut (souhait, participation, follow, passe) n'envoient aucun message WebSocket : leur suivi passe par l'enregistreur `async.log` de la skill `volontariapp-load-ramp`. Attention : ws-service diffuse aussi chaque like et commentaire a tous les clients connectes (`broadcastExcept`), vrais utilisateurs compris.
+
 **Demarrage a froid et montee rapide.** Par defaut, chaque palier part a plein debit et ses `LOAD_WARMUP_SECONDS` premieres secondes sont jetees. Pour mesurer ce que vivent les utilisateurs pendant une attaque, lire le debut a part :
 
 ```bash
@@ -196,6 +198,8 @@ Le debut de palier range chaque requete selon la seconde ou elle est partie (une
 | `LOAD_MODE` | `routes` | `routes` : 5 routes de reference ; `app` : lectures de nativapp (`app-v1`) |
 | `LOAD_WRITES` | `off` | Ecritures du mode app : `off`, `default` ou liste de routes d'ecriture |
 | `LOAD_POOL_ACTORS` | `200` | Comptes `load.NNNN` ouverts pour les ecritures |
+| `LOAD_PROBE_SOCKETS` | `20` | Sockets de la sonde asynchrone (0 : sans sonde) |
+| `LOAD_ABORT_ASYNC_P95_MS` / `LOAD_ABORT_ASYNC_LOST_RATE` | `30000` / `0.02` | Seuils d'arret sur les effets asynchrones |
 | `LOAD_RAMP_UP_SECONDS` | `0` | Montee lineaire de 0 au debit du palier, avant l'echauffement et hors statistiques (0 : plein debit des la premiere seconde) |
 | `LOAD_ONSET_SECONDS` | `0` | Lit a part les N premieres secondes du palier (montee et echauffement compris), avec une serie par seconde ; 0 : desactive |
 | `LOAD_ACTORS` | `200` | Comptes existants utilises (memes identites que le pool principal, aucun renommage) |

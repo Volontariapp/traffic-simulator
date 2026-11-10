@@ -6,6 +6,8 @@ import type { LoadSender } from './load-http.js';
 import { findLastHealthyRate, type LoadReport, type StepResult, type StopReason } from './load-report.js';
 import { createRoutesPlanner, type TargetPlanner } from './load-request.js';
 import { OnsetRecorder } from './onset-recorder.js';
+import type { AsyncWindow } from './probe/async-probe.js';
+import type { AsyncStepStats } from './load-report.js';
 import { runAtRate, systemClock, type SchedulerClock } from './rate-scheduler.js';
 
 export interface RunnerDeps {
@@ -14,6 +16,8 @@ export interface RunnerDeps {
   send: LoadSender;
   /** Absent : mode `routes` construit depuis `config.mix` (comportement d'origine). */
   planner?: TargetPlanner;
+  /** Sonde des effets asynchrones, lue a chaque fenetre (absente : HTTP seul). */
+  probe?: { takeWindow(): AsyncWindow };
   log: (line: string) => void;
   shouldStop: () => boolean;
   /** Absent : aucune confirmation. Refus : la rampe s'arrete avant le palier. */
@@ -47,6 +51,8 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
     maxErrorRate: config.abortErrorRate,
     maxP95Ms: config.abortP95Ms,
     windowsRequired: config.abortWindows,
+    maxAsyncP95Ms: config.abortAsyncP95Ms,
+    maxAsyncLostRate: config.abortAsyncLostRate,
   });
   const planner = deps.planner ?? createRoutesPlanner(config.mix, actors);
   const sink = new Sink();
@@ -140,6 +146,9 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
     sink.aggregate = aggregate;
     const windowCount = Math.max(1, Math.round(config.stepSeconds / config.windowSeconds));
     let sent = 0;
+    // Les effets de la montee et de l'echauffement ne comptent pas dans le palier
+    deps.probe?.takeWindow();
+    const asyncStep: AsyncStepStats = { received: 0, lost: 0, lostRate: 0, worstWindowP95: 0, max: 0 };
     let windowsRun = 0;
     let abortReason: string | undefined;
 
@@ -156,7 +165,17 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
       windowsRun += 1;
       const snap = sink.current.snapshot();
       deps.log(formatWindow(w, windowCount, snap));
-      abortReason = policy.observe(snap);
+      const asyncSnap = deps.probe?.takeWindow();
+      if (asyncSnap) {
+        deps.log(
+          `[load]     effets asynchrones : ${asyncSnap.received} recus, ${asyncSnap.lost} perdus, p50 ${Math.round(asyncSnap.p50)} ms, p95 ${Math.round(asyncSnap.p95)} ms`,
+        );
+        asyncStep.received += asyncSnap.received;
+        asyncStep.lost += asyncSnap.lost;
+        asyncStep.worstWindowP95 = Math.max(asyncStep.worstWindowP95, asyncSnap.p95);
+        asyncStep.max = Math.max(asyncStep.max, asyncSnap.max);
+      }
+      abortReason = policy.observe(snap, asyncSnap);
       if (abortReason) break;
     }
 
@@ -176,6 +195,15 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
         stats: aggregate.snapshot(planner.kindOf?.bind(planner)),
         ...(config.rampUpSeconds > 0 ? { rampUpSeconds: config.rampUpSeconds } : {}),
         ...(stepOnset ? { onset: stepOnset } : {}),
+        ...(deps.probe
+          ? {
+              async: {
+                ...asyncStep,
+                lostRate:
+                  asyncStep.received + asyncStep.lost === 0 ? 0 : asyncStep.lost / (asyncStep.received + asyncStep.lost),
+              },
+            }
+          : {}),
         ...(abortReason ? { abortReason } : {}),
       });
     }

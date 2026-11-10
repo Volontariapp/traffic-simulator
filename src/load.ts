@@ -11,6 +11,8 @@ import type { TargetPlanner } from './load/load-request.js';
 import { WritePlanner } from './load/app/write-planner.js';
 import { LoadFixtures } from './load/fixtures/load-fixtures.js';
 import { openLoadPool } from './load/fixtures/load-pool.js';
+import { AsyncProbe } from './load/probe/async-probe.js';
+import { createProbeSocketFactory } from './load/probe/socket-factory.js';
 
 /**
  * Rampe de charge (modes `routes` et `app`, ecritures du pool `load.NNNN` avec LOAD_WRITES), a lancer depuis une machine hors du cluster (sinon la charge
@@ -53,6 +55,7 @@ async function main(): Promise<void> {
   let loadPool: ActorPool | undefined;
   let fixtures: LoadFixtures | undefined;
   let writes: WritePlanner | undefined;
+  let probe: AsyncProbe | undefined;
   if (config.writes.length > 0) {
     const loadClient = new ApiClient(config.baseUrl, config.accessHeaders);
     loadPool = await openLoadPool(loadClient, config.poolActors, false);
@@ -60,7 +63,18 @@ async function main(): Promise<void> {
     loadPool.startTokenKeepAlive({ intervalMs: 60_000, marginMs: 180_000, canRun: () => true });
     fixtures = new LoadFixtures(loadClient, loadActors);
     const fixtureEvents = await fixtures.findEvents();
-    writes = new WritePlanner({ loadActors, fixtureEvents });
+    // Sonde : seuls like et commentaire renvoient un message WebSocket a leur emetteur
+    const probed = config.writes.some((w) => w === 'like-toggle' || w === 'comment-cycle');
+    if (probed && config.probeSockets > 0) {
+      probe = new AsyncProbe({
+        accounts: loadActors.slice(0, config.probeSockets).map((a) => ({ userId: a.id, token: a.accessToken })),
+        factory: createProbeSocketFactory(config.baseUrl, config.accessHeaders),
+        lostAfterMs: config.probeLostAfterMs,
+      });
+      probe.start();
+      console.log(`[load] sonde asynchrone : ${probe.socketCount} sockets`);
+    }
+    writes = new WritePlanner({ loadActors, fixtureEvents, probe });
     console.log(
       `[load] ecritures ${config.writes.join(', ')} : ${loadActors.length} comptes load, ${fixtureEvents.length} events de fixture`,
     );
@@ -88,11 +102,13 @@ async function main(): Promise<void> {
     actors,
     send,
     planner,
+    probe,
     log: (line) => console.log(line),
     shouldStop: () => stopRequested,
     confirm,
   });
   rl?.close();
+  probe?.close();
 
   await writeReport(config.reportPath, report);
   console.log(`\n${renderMarkdown(report)}`);

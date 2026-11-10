@@ -59,7 +59,13 @@ interface LiveComment {
   createdAt: number;
 }
 
+/** Sonde des effets asynchrones : une ecriture acceptee annonce le message WebSocket attendu. */
+export interface WriteProbe {
+  expect(userId: string, event: 'post.liked' | 'post.comment.created', postId: string): void;
+}
+
 export interface WritePlannerOptions {
+  probe?: WriteProbe;
   loadActors: readonly UserAuthCredentials[];
   fixtureEvents: readonly string[];
   nowMs?: () => number;
@@ -148,6 +154,7 @@ export class WritePlanner {
       case 'add':
         // 409 : deja present cote serveur, l'etat local se recale
         if (ok || status === 409) this.setFor(op.set, op.actorId).add(op.key);
+        if (ok && op.set === this.liked) this.options.probe?.expect(op.actorId, 'post.liked', op.key);
         if (ok && op.set === this.joined) this.setFor(this.wished, op.actorId).delete(op.key);
         return;
       case 'remove':
@@ -164,6 +171,7 @@ export class WritePlanner {
       case 'comment-create': {
         const id = ok ? createdId(response.body) : undefined;
         if (id) this.comments.set(op.actorId, { id, postId: op.postId, createdAt: this.nowMs() });
+        if (ok) this.options.probe?.expect(op.actorId, 'post.comment.created', op.postId);
         return;
       }
       case 'comment-delete':

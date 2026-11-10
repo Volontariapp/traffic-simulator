@@ -74,6 +74,12 @@ export interface LoadConfig {
   writes: ExecutableWrite[];
   /** Comptes du pool `load.NNNN` ouverts quand des ecritures sont activees. */
   poolActors: number;
+  /** Sockets de la sonde asynchrone (premiers comptes load), si like ou commentaire sont actives. 0 : sans sonde. */
+  probeSockets: number;
+  /** Delai au-dela duquel un effet attendu est compte perdu. */
+  probeLostAfterMs: number;
+  abortAsyncP95Ms: number;
+  abortAsyncLostRate: number;
   /**
    * Jeton de service Cloudflare Access (memes variables que nativapp/.env). Vide : aucun en-tete.
    * Les valeurs ne sont jamais journalisees ni ecrites dans le rapport.
@@ -247,6 +253,10 @@ export function loadLoadConfig(env: NodeJS.ProcessEnv = process.env): LoadConfig
     appMix: mode === 'app' && rawMix !== undefined ? parseAppMix(rawMix, writes) : defaultAppMix(writes),
     writes,
     poolActors: readNumber(env, 'LOAD_POOL_ACTORS', 200, (v) => Number.isInteger(v) && v >= 2, 'entier >= 2'),
+    probeSockets: readNumber(env, 'LOAD_PROBE_SOCKETS', 20, (v) => Number.isInteger(v) && v >= 0, 'entier >= 0'),
+    probeLostAfterMs: readNumber(env, 'LOAD_PROBE_LOST_AFTER_MS', 60_000, positive, 'millisecondes > 0'),
+    abortAsyncP95Ms: readNumber(env, 'LOAD_ABORT_ASYNC_P95_MS', 30_000, positive, 'millisecondes > 0'),
+    abortAsyncLostRate: readNumber(env, 'LOAD_ABORT_ASYNC_LOST_RATE', 0.02, (v) => v > 0 && v <= 1, 'ratio entre 0 et 1'),
     accessHeaders: parseAccessHeaders(env),
     confirmEachStep: (env.LOAD_CONFIRM ?? 'true').toLowerCase() !== 'false',
     reportPath: env.LOAD_REPORT_PATH?.trim() || 'load-report.json',

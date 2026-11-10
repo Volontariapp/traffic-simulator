@@ -1,10 +1,14 @@
 import type { LatencySummary } from './latency-stats.js';
+import type { AsyncWindow } from './probe/async-probe.js';
 
 export interface AbortThresholds {
   maxErrorRate: number;
   maxP95Ms: number;
   /** Fenetres consecutives hors seuil avant l'arret. */
   windowsRequired: number;
+  /** Effets asynchrones (sonde WebSocket) : p95 du delai et part d'effets perdus. */
+  maxAsyncP95Ms?: number;
+  maxAsyncLostRate?: number;
 }
 
 /**
@@ -16,8 +20,17 @@ export class AbortPolicy {
 
   constructor(private readonly thresholds: AbortThresholds) {}
 
-  observe(window: LatencySummary): string | undefined {
+  observe(window: LatencySummary, asyncWindow?: AsyncWindow): string | undefined {
     const reasons: string[] = [];
+    const { maxAsyncP95Ms, maxAsyncLostRate } = this.thresholds;
+    if (asyncWindow && maxAsyncP95Ms !== undefined && asyncWindow.received > 0 && asyncWindow.p95 > maxAsyncP95Ms) {
+      reasons.push(`delai asynchrone p95 ${Math.round(asyncWindow.p95)} ms > ${maxAsyncP95Ms} ms`);
+    }
+    if (asyncWindow && maxAsyncLostRate !== undefined && asyncWindow.lostRate > maxAsyncLostRate) {
+      reasons.push(
+        `effets asynchrones perdus ${(asyncWindow.lostRate * 100).toFixed(1)} % > ${(maxAsyncLostRate * 100).toFixed(1)} %`,
+      );
+    }
     if (window.count > 0 && window.errorRate > this.thresholds.maxErrorRate) {
       reasons.push(
         `erreurs ${(window.errorRate * 100).toFixed(1)} % > ${(this.thresholds.maxErrorRate * 100).toFixed(1)} %`,
@@ -33,7 +46,7 @@ export class AbortPolicy {
     }
 
     if (reasons.length === 0) {
-      if (window.count > 0) this.consecutive = 0;
+      if (window.count > 0 || (asyncWindow?.received ?? 0) > 0) this.consecutive = 0;
       return undefined;
     }
     this.consecutive += 1;
