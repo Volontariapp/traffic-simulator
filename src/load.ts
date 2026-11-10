@@ -6,15 +6,17 @@ import { loadLoadConfig } from './load/load-config.js';
 import { createSender } from './load/load-http.js';
 import { renderMarkdown, writeReport } from './load/load-report.js';
 import { runRamp } from './load/load-runner.js';
+import { AppPlanner, primeAppPlanner } from './load/app/app-planner.js';
+import type { TargetPlanner } from './load/load-request.js';
 
 /**
- * Rampe de charge en lecture seule, a lancer depuis une machine hors du cluster (sinon la charge
+ * Rampe de charge en lecture seule (modes `routes` et `app`), a lancer depuis une machine hors du cluster (sinon la charge
  * consomme la RAM de l'hote que l'on cherche a mesurer). Voir README, section "Rampe de charge".
  * Coupez d'abord l'activite ambiante du simulateur : elle fausse la mesure.
  */
 async function main(): Promise<void> {
   const config = loadLoadConfig();
-  console.log(`[load] cible ${config.baseUrl}`);
+  console.log(`[load] cible ${config.baseUrl}, mode ${config.mode}`);
   console.log(`[load] paliers ${config.steps.join(', ')} req/s, ${config.stepSeconds} s chacun`);
 
   const hasAccessToken = Object.keys(config.accessHeaders).length > 0;
@@ -43,15 +45,28 @@ async function main(): Promise<void> {
       }
     : undefined;
 
+  const send = createSender({
+    baseUrl: config.baseUrl,
+    timeoutMs: config.timeoutMs,
+    extraHeaders: config.accessHeaders,
+    refresher: (stale) => pool.renewSession(stale),
+  });
+
+  let planner: TargetPlanner | undefined;
+  if (config.mode === 'app') {
+    const appPlanner = new AppPlanner({ mix: config.appMix, actors });
+    const primed = await primeAppPlanner(appPlanner, send, actors);
+    console.log(
+      `[load] mode app : ${primed} requetes de preparation, ${appPlanner.posts.size} posts, ${appPlanner.events.size} events, ${appPlanner.users.size} utilisateurs connus`,
+    );
+    planner = appPlanner;
+  }
+
   const report = await runRamp({
     config,
     actors,
-    send: createSender({
-      baseUrl: config.baseUrl,
-      timeoutMs: config.timeoutMs,
-      extraHeaders: config.accessHeaders,
-      refresher: (stale) => pool.renewSession(stale),
-    }),
+    send,
+    planner,
     log: (line) => console.log(line),
     shouldStop: () => stopRequested,
     confirm,

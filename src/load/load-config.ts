@@ -1,3 +1,18 @@
+import {
+  APP_V1,
+  executableMix,
+  isAppReadRoute,
+  isAppWriteRoute,
+  type AppReadRoute,
+} from './app/app-profile.js';
+
+/**
+ * `routes` : les 5 routes de reference, inchangees (comparables d'une rampe a l'autre).
+ * `app` : toutes les lectures de nativapp, melange `app-v1` (src/load/app/app-profile.ts).
+ */
+export const LOAD_MODES = ['routes', 'app'] as const;
+export type LoadMode = (typeof LOAD_MODES)[number];
+
 /**
  * `events-list-app` reprend les filtres que nativapp envoie (exclusions personnelles et
  * utilisateurs bloques) : chacun coute des appels pagines a ms-social avant la recherche.
@@ -16,7 +31,13 @@ export interface RouteWeight {
   weight: number;
 }
 
+export interface AppRouteWeight {
+  route: AppReadRoute;
+  weight: number;
+}
+
 export interface LoadConfig {
+  mode: LoadMode;
   /** Gateway visee, suffixe /api/v1 ajoute si absent. */
   baseUrl: string;
   /** Debits cibles successifs, en requetes par seconde. */
@@ -44,7 +65,10 @@ export interface LoadConfig {
   abortP95Ms: number;
   /** Nombre de fenetres consecutives hors seuil avant l'arret. */
   abortWindows: number;
+  /** Mode `routes` : melange de `LOAD_MIX` (ou le melange de reference). */
   mix: RouteWeight[];
+  /** Mode `app` : lectures de `app-v1`, ou `LOAD_MIX` avec des noms de routes d'app. */
+  appMix: AppRouteWeight[];
   /**
    * Jeton de service Cloudflare Access (memes variables que nativapp/.env). Vide : aucun en-tete.
    * Les valeurs ne sont jamais journalisees ni ecrites dans le rapport.
@@ -105,6 +129,34 @@ export function parseMix(raw: string): RouteWeight[] {
   return mix;
 }
 
+export function parseMode(raw: string | undefined): LoadMode {
+  const value = (raw ?? 'routes').trim();
+  const mode = LOAD_MODES.find((m) => m === value);
+  if (!mode) throw new Error(`LOAD_MODE=${raw} invalide : ${LOAD_MODES.join(' ou ')}`);
+  return mode;
+}
+
+/** `LOAD_MIX` du mode `app` : routes de lecture uniquement (les ecritures arrivent avec le pool load). */
+export function parseAppMix(raw: string): AppRouteWeight[] {
+  const mix = raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
+    .map((part) => {
+      const [name, weightRaw] = part.split(':');
+      const weight = Number(weightRaw);
+      if (isAppWriteRoute(name)) {
+        throw new Error(`LOAD_MIX : "${name}" est une ecriture, pas encore executable en mode app`);
+      }
+      if (!isAppReadRoute(name) || !Number.isFinite(weight) || weight <= 0) {
+        throw new Error(`LOAD_MIX entree "${part}" invalide en mode app : <route d'app>:<poids>`);
+      }
+      return { route: name, weight };
+    });
+  if (mix.length === 0) throw new Error('LOAD_MIX ne contient aucune route');
+  return mix;
+}
+
 export function normalizeBaseUrl(raw: string): string {
   const trimmed = raw.replace(/\/+$/, '');
   return trimmed.endsWith('/api/v1') ? trimmed : `${trimmed}/api/v1`;
@@ -127,7 +179,10 @@ export function loadLoadConfig(env: NodeJS.ProcessEnv = process.env): LoadConfig
     throw new Error('LOAD_BASE_URL est obligatoire (aucune valeur par defaut : on ne vise jamais la prod par accident)');
   }
   const positive = (v: number) => v > 0;
+  const mode = parseMode(env.LOAD_MODE);
+  const rawMix = env.LOAD_MIX;
   return {
+    mode,
     baseUrl: normalizeBaseUrl(baseUrl),
     steps: parseSteps(env.LOAD_STEPS ?? '50,100,200,400,800,1000'),
     stepSeconds: readNumber(env, 'LOAD_STEP_SECONDS', 60, positive, 'nombre de secondes > 0'),
@@ -141,7 +196,9 @@ export function loadLoadConfig(env: NodeJS.ProcessEnv = process.env): LoadConfig
     abortErrorRate: readNumber(env, 'LOAD_ABORT_ERROR_RATE', 0.05, (v) => v > 0 && v <= 1, 'ratio entre 0 et 1'),
     abortP95Ms: readNumber(env, 'LOAD_ABORT_P95_MS', 2000, positive, 'millisecondes > 0'),
     abortWindows: readNumber(env, 'LOAD_ABORT_WINDOWS', 2, (v) => Number.isInteger(v) && v > 0, 'entier > 0'),
-    mix: parseMix(env.LOAD_MIX ?? DEFAULT_MIX),
+    // Mode routes : lecture de LOAD_MIX strictement identique a la premiere version
+    mix: parseMix(mode === 'routes' ? (rawMix ?? DEFAULT_MIX) : DEFAULT_MIX),
+    appMix: mode === 'app' && rawMix !== undefined ? parseAppMix(rawMix) : executableMix(APP_V1),
     accessHeaders: parseAccessHeaders(env),
     confirmEachStep: (env.LOAD_CONFIRM ?? 'true').toLowerCase() !== 'false',
     reportPath: env.LOAD_REPORT_PATH?.trim() || 'load-report.json',

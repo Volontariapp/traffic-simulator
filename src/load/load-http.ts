@@ -8,6 +8,8 @@ export interface LoadResponse {
   status: number;
   ms: number;
   timedOut: boolean;
+  /** Corps JSON decode, seulement pour une cible `harvest` (absent si illisible). */
+  body?: unknown;
 }
 
 export type LoadSender = (target: LoadTarget, token: string) => Promise<LoadResponse>;
@@ -20,6 +22,14 @@ export interface SenderOptions {
   refresher?: TokenRefresher;
   fetchFn?: FetchLike;
   now?: () => number;
+}
+
+function parseBody(text: string): { body?: unknown } {
+  try {
+    return { body: JSON.parse(text) as unknown };
+  } catch {
+    return {};
+  }
 }
 
 function isTimeout(error: unknown): boolean {
@@ -58,6 +68,11 @@ export function createSender(options: SenderOptions): LoadSender {
         token,
         options.refresher,
       );
+      if (target.harvest && response.ok) {
+        const text = await response.text();
+        const ms = now() - startedAt;
+        return { status: response.status, ms, timedOut: false, ...parseBody(text) };
+      }
       await response.arrayBuffer();
       return { status: response.status, ms: now() - startedAt, timedOut: false };
     } catch (error: unknown) {

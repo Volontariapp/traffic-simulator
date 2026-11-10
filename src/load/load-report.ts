@@ -24,6 +24,8 @@ export interface LoadReport {
   startedAt: string;
   endedAt: string;
   baseUrl: string;
+  /** Absent dans les rapports anterieurs au mode app : `routes`. */
+  mode?: string;
   mix: string;
   stopReason: StopReason;
   steps: StepResult[];
@@ -44,7 +46,7 @@ export function renderMarkdown(report: LoadReport): string {
   const lines = [
     `Rampe de charge sur ${report.baseUrl}`,
     `Debut ${report.startedAt}, fin ${report.endedAt}, arret : ${report.stopReason}`,
-    `Melange : ${report.mix}`,
+    `Mode : ${report.mode ?? 'routes'}, melange : ${report.mix}`,
     '',
     '| Cible (req/s) | Obtenu | p50 ms | p95 ms | p99 ms | Erreurs % | 206 | 429 | Dropped | Verdict |',
     '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- |',
