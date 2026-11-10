@@ -30,6 +30,8 @@ export interface TargetPlanner {
   build(route: string, actor: UserAuthCredentials, rng: () => number): LoadTarget;
   /** Reponse recue (corps decode si `harvest`). */
   observe?(target: LoadTarget, response: LoadResponse): void;
+  /** Type d'une route pour le rapport (`read`, `write`). Absent : pas de ventilation. */
+  kindOf?(route: string): 'read' | 'write';
 }
 
 /**

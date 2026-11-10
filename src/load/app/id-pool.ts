@@ -31,14 +31,14 @@ export class IdPool {
     return this.ids[Math.floor(rng() * this.ids.length)];
   }
 
-  /** Jusqu'a `count` identifiants distincts. */
+  /** Jusqu'a `count` identifiants distincts (tirage sans remise). */
   sample(count: number, rng: () => number): string[] {
-    const picked = new Set<string>();
-    const wanted = Math.min(count, this.ids.length);
-    for (let attempt = 0; picked.size < wanted && attempt < wanted * 4; attempt++) {
-      const id = this.pick(rng);
-      if (id !== undefined) picked.add(id);
+    const copy = [...this.ids];
+    const wanted = Math.min(count, copy.length);
+    for (let i = 0; i < wanted; i++) {
+      const j = i + Math.floor(rng() * (copy.length - i));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
     }
-    return [...picked];
+    return copy.slice(0, wanted);
   }
 }

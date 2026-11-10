@@ -173,7 +173,7 @@ export async function runRamp(deps: RunnerDeps): Promise<LoadReport> {
         sent,
         dropped,
         achievedRate: (sent - dropped) / (windowsRun * config.windowSeconds),
-        stats: aggregate.snapshot(),
+        stats: aggregate.snapshot(planner.kindOf?.bind(planner)),
         ...(config.rampUpSeconds > 0 ? { rampUpSeconds: config.rampUpSeconds } : {}),
         ...(stepOnset ? { onset: stepOnset } : {}),
         ...(abortReason ? { abortReason } : {}),

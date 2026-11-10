@@ -42,6 +42,40 @@ function cell(value: number, digits = 0): string {
   return value.toFixed(digits);
 }
 
+/**
+ * Mode app : par palier, la part reelle de chaque route (melange obtenu) et ses issues, puis
+ * lectures contre ecritures. Les 206 et 4xx sont lus ici, le tableau principal ne les ventile pas.
+ */
+function renderBreakdown(steps: readonly StepResult[]): string[] {
+  const lines: string[] = [];
+  for (const step of steps) {
+    const { stats } = step;
+    lines.push('');
+    lines.push(`Palier ${step.targetRate} req/s, par route :`);
+    lines.push('');
+    lines.push('| Route | Part % | Requetes | p50 ms | p95 ms | Erreurs | 206 | 4xx | 429 |');
+    lines.push('| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |');
+    const rows = Object.entries(stats.byRoute).sort((a, b) => b[1].count - a[1].count);
+    for (const [route, r] of rows) {
+      const share = stats.count === 0 ? 0 : (r.count / stats.count) * 100;
+      lines.push(
+        `| ${route} | ${cell(share, 1)} | ${r.count} | ${cell(r.p50)} | ${cell(r.p95)} | ${r.errors} | ${r.degraded} | ${r.clientErrors} | ${cell(r.shedRate * r.count)} |`,
+      );
+    }
+    if (stats.byKind) {
+      lines.push('');
+      lines.push('| Type | Requetes | p50 ms | p95 ms | p99 ms | Erreurs % | 4xx |');
+      lines.push('| :--- | ---: | ---: | ---: | ---: | ---: | ---: |');
+      for (const [kind, k] of Object.entries(stats.byKind).sort()) {
+        lines.push(
+          `| ${kind} | ${k.count} | ${cell(k.p50)} | ${cell(k.p95)} | ${cell(k.p99)} | ${cell(k.errorRate * 100, 1)} | ${k.clientErrors} |`,
+        );
+      }
+    }
+  }
+  return lines;
+}
+
 export function renderMarkdown(report: LoadReport): string {
   const lines = [
     `Rampe de charge sur ${report.baseUrl}`,
@@ -57,6 +91,7 @@ export function renderMarkdown(report: LoadReport): string {
       `| ${step.targetRate} | ${cell(step.achievedRate, 1)} | ${cell(stats.p50)} | ${cell(stats.p95)} | ${cell(stats.p99)} | ${cell(stats.errorRate * 100, 1)} | ${stats.outcomes.degraded} | ${stats.outcomes.shed} | ${step.dropped} | ${step.abortReason ? `ARRET : ${step.abortReason}` : 'ok'} |`,
     );
   }
+  if (report.mode === 'app') lines.push(...renderBreakdown(report.steps));
   const withOnset = report.steps.filter((step) => step.onset !== undefined);
   if (withOnset.length > 0) {
     lines.push('');

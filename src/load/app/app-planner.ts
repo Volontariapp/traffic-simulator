@@ -57,6 +57,12 @@ export class AppPlanner implements TargetPlanner {
   readonly posts = new IdPool();
   readonly events = new IdPool();
   readonly users = new IdPool();
+  /**
+   * Derniere liste lue par chaque acteur : comme dans l'app, il ouvre de preference un element
+   * qu'il vient d'afficher (localite des caches), sinon un element vu par un autre.
+   */
+  private readonly seenBy = new Map<string, { posts: IdPool; events: IdPool }>();
+  private readonly listReader = new Map<LoadTarget, string>();
   private readonly nowMs: () => number;
 
   constructor(private readonly options: AppPlannerOptions) {
@@ -83,6 +89,19 @@ export class AppPlanner implements TargetPlanner {
 
   build(route: string, actor: UserAuthCredentials, rng: () => number): LoadTarget {
     if (isExecutableWrite(route) && this.options.writes) return this.options.writes.build(route, rng);
+    const target = this.buildRead(route, actor, rng);
+    if (target.harvest) this.listReader.set(target, actor.id);
+    return target;
+  }
+
+  /** Element vu par l'acteur (7 fois sur 10 s'il en a vu), sinon un element vu par n'importe qui. */
+  private pickSeen(kind: 'posts' | 'events', actor: UserAuthCredentials, rng: () => number): string | undefined {
+    const own = this.seenBy.get(actor.id)?.[kind];
+    if (own && own.size > 0 && rng() < 0.7) return own.pick(rng);
+    return this[kind].pick(rng);
+  }
+
+  private buildRead(route: string, actor: UserAuthCredentials, rng: () => number): LoadTarget {
     if (!isAppReadRoute(route)) throw new Error(`Route d'app inconnue : ${route}`);
     const page = 1 + Math.floor(rng() * 3);
     switch (route) {
@@ -91,7 +110,9 @@ export class AppPlanner implements TargetPlanner {
       case 'ranking-events':
         return { route, path: `/ranking/events?limit=${EVENTS_PAGE_LIMIT}`, harvest: true };
       case 'likes-summary': {
-        const postIds = this.posts.sample(LIKES_SUMMARY_IDS, rng);
+        // Resume des posts de l'ecran de l'acteur, comme l'accueil de l'app
+        const own = this.seenBy.get(actor.id)?.posts;
+        const postIds = (own && own.size > 0 ? own : this.posts).sample(LIKES_SUMMARY_IDS, rng);
         if (postIds.length === 0) return this.build(POST_SOURCE, actor, rng);
         return { route, path: '/social/likes-summary', method: 'POST', body: { postIds } };
       }
@@ -100,23 +121,23 @@ export class AppPlanner implements TargetPlanner {
       case 'me':
         return { route, path: '/users/me' };
       case 'event-detail': {
-        const id = this.events.pick(rng);
+        const id = this.pickSeen('events', actor, rng);
         return id ? { route, path: `/events/${id}` } : this.build(EVENT_SOURCE, actor, rng);
       }
       case 'comments-list': {
-        const id = this.posts.pick(rng);
+        const id = this.pickSeen('posts', actor, rng);
         return id
           ? { route, path: `/posts/${id}/comments?${flatPage(1, COMMENTS_PAGE_SIZE)}` }
           : this.build(POST_SOURCE, actor, rng);
       }
       case 'event-participants': {
-        const id = this.events.pick(rng);
+        const id = this.pickSeen('events', actor, rng);
         return id
           ? { route, path: `/users/event/${id}/participants?${nestedPage(1, 20)}` }
           : this.build(EVENT_SOURCE, actor, rng);
       }
       case 'related-posts': {
-        const id = this.events.pick(rng);
+        const id = this.pickSeen('events', actor, rng);
         return id
           ? { route, path: `/social/events/${id}/related-posts?${nestedPage(1, 10)}` }
           : this.build(EVENT_SOURCE, actor, rng);
@@ -153,16 +174,31 @@ export class AppPlanner implements TargetPlanner {
       this.options.writes.observe(target, response);
       return;
     }
+    const readerId = this.listReader.get(target);
+    this.listReader.delete(target);
     if (response.body === undefined) return;
+    const seen = readerId ? this.seenFor(readerId) : undefined;
     for (const post of listOf(response.body, 'posts')) {
       this.posts.add(post.id);
+      seen?.posts.add(post.id);
       this.users.add(post.authorId);
       if (isRecord(post.event)) this.events.add(post.event.id);
     }
     for (const event of listOf(response.body, 'events')) {
       this.events.add(event.id);
+      seen?.events.add(event.id);
       this.users.add(event.organizerId);
     }
+  }
+
+  private seenFor(actorId: string): { posts: IdPool; events: IdPool } {
+    let seen = this.seenBy.get(actorId);
+    if (!seen) {
+      // Une page ou deux de l'ecran courant
+      seen = { posts: new IdPool(30), events: new IdPool(40) };
+      this.seenBy.set(actorId, seen);
+    }
+    return seen;
   }
 
   private userFor(rng: () => number): string {
