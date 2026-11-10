@@ -15,6 +15,8 @@ export interface LoadTarget {
   body?: unknown;
   /** Vrai : le sender decode la reponse JSON et la rend dans `LoadResponse.body`. */
   harvest?: boolean;
+  /** Jeton d'un autre compte que l'acteur tire (ecritures : pool `load.NNNN`). */
+  token?: string;
 }
 
 /**

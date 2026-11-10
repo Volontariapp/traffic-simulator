@@ -170,6 +170,13 @@ yarn load:cleanup --purge        # retire aussi les events de fixture
 
 Le nettoyage lit les listes du graphe social (`/social/follows`, `/social/events/{wished,participated}`), ne retire que les relations vers des objets du pool et signale les autres sans les toucher. Hors `setup`, un compte absent est ignore, jamais cree. Variables : `LOAD_POOL_ACTORS` (200), `LOAD_FIXTURE_EVENTS` (10), plus `LOAD_BASE_URL` et le jeton Cloudflare Access comme `yarn load`.
 
+**Ecritures en mode app (`LOAD_WRITES`).** Absent ou `off` : lectures seules. `default` : les ecritures invisibles des vrais utilisateurs, souhait et participation (bascules sur les events DRAFT du pool), follow et unfollow entre comptes load, passes du swipe (lots de 5) sur ces events. Liste explicite pour aller plus loin : `ranking-refresh`, `like-toggle`, `comment-cycle`, `post-cycle` (posts texte du pool, visibles dans les fils pendant leur vie de 60 s, commentaires de 30 s). `location` et `event-cycle` sont refusees. Chaque ecriture part d'un compte `load.NNNN` (jeton du pool, pas celui de l'acteur de lecture) ; une paire deja en vol n'est pas rejouee ; un 409 ou un 404 recale l'etat. En fin de rampe, le nettoyage du pool tourne seul et relit tout (code 2 s'il reste quelque chose). Prealable : `yarn load:setup`.
+
+```bash
+LOAD_MODE=app LOAD_WRITES=default LOAD_STEPS="10" LOAD_RAMP_UP_SECONDS=10 yarn load
+LOAD_MODE=app LOAD_WRITES=default,like-toggle,comment-cycle,post-cycle yarn load   # second passage
+```
+
 **Demarrage a froid et montee rapide.** Par defaut, chaque palier part a plein debit et ses `LOAD_WARMUP_SECONDS` premieres secondes sont jetees. Pour mesurer ce que vivent les utilisateurs pendant une attaque, lire le debut a part :
 
 ```bash
@@ -187,6 +194,8 @@ Le debut de palier range chaque requete selon la seconde ou elle est partie (une
 | `LOAD_STEPS` | `50,100,200,400,800,1000` | Debits cibles en req/s |
 | `LOAD_STEP_SECONDS` / `LOAD_WARMUP_SECONDS` | `60` / `10` | Duree de mesure et echauffement par palier |
 | `LOAD_MODE` | `routes` | `routes` : 5 routes de reference ; `app` : lectures de nativapp (`app-v1`) |
+| `LOAD_WRITES` | `off` | Ecritures du mode app : `off`, `default` ou liste de routes d'ecriture |
+| `LOAD_POOL_ACTORS` | `200` | Comptes `load.NNNN` ouverts pour les ecritures |
 | `LOAD_RAMP_UP_SECONDS` | `0` | Montee lineaire de 0 au debit du palier, avant l'echauffement et hors statistiques (0 : plein debit des la premiere seconde) |
 | `LOAD_ONSET_SECONDS` | `0` | Lit a part les N premieres secondes du palier (montee et echauffement compris), avec une serie par seconde ; 0 : desactive |
 | `LOAD_ACTORS` | `200` | Comptes existants utilises (memes identites que le pool principal, aucun renommage) |

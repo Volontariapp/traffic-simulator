@@ -4,6 +4,8 @@ export function buildLoadConfig(overrides: Partial<LoadConfig> = {}): LoadConfig
   return {
     mode: 'routes',
     appMix: [{ route: 'me', weight: 1 }],
+    writes: [],
+    poolActors: 2,
     baseUrl: 'http://gateway.test/api/v1',
     steps: [10],
     stepSeconds: 2,

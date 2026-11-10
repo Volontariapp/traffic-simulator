@@ -19,7 +19,7 @@ function readCount(raw: string | undefined, fallback: number, key: string): numb
 
 function printReport(report: CleanupReport): void {
   const line = (label: string, c: CleanupReport['found']): string =>
-    `${label} : ${c.follows} follows, ${c.wishes} souhaits, ${c.participations} participations, ${c.events} events`;
+    `${label} : ${c.posts} posts, ${c.follows} follows, ${c.wishes} souhaits, ${c.participations} participations, ${c.events} events`;
   console.log(`[load:cleanup] ${report.dryRun ? 'DRY-RUN, rien n a ete ecrit' : 'nettoyage applique'}`);
   console.log(`[load:cleanup] ${line('trouves', report.found)}`);
   console.log(`[load:cleanup] ${line(report.dryRun ? 'a retirer' : 'restants apres relecture', report.remaining)}`);

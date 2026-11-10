@@ -286,6 +286,23 @@ export class ApiClient {
     return res.ok ? (res.data?.ids ?? []) : undefined;
   }
 
+  /** Identifiants des posts du compte authentifie, lus dans le graphe social. undefined si echec. */
+  async listMyPostIds(token: string, limit = 100): Promise<string[] | undefined> {
+    const res = await this.request<{ ids?: string[] }>(
+      `/social/posts/me?pagination[page]=1&pagination[limit]=${limit}`,
+      { method: 'GET' },
+      token,
+      true,
+    );
+    return res.ok ? (res.data?.ids ?? []) : undefined;
+  }
+
+  /** Supprime un post du compte authentifie. 404 (deja supprime) compte comme fait. */
+  async deletePost(token: string, postId: string): Promise<boolean> {
+    const res = await this.request(`/posts/${postId}`, { method: 'DELETE' }, token, true);
+    return res.ok || res.status === 404;
+  }
+
   /** Titre d'un event, lu par son organisateur (brouillon compris). undefined si absent ou refus. */
   async getEventTitle(token: string, eventId: string): Promise<string | undefined> {
     const res = await this.request<{ event?: { title?: string } }>(`/events/${eventId}`, { method: 'GET' }, token, true);

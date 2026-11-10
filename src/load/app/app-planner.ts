@@ -3,6 +3,7 @@ import { PARIS_DISTRICTS } from '../../geo/paris-districts.js';
 import type { LoadResponse, LoadSender } from '../load-http.js';
 import { pickRoute, type LoadTarget, type TargetPlanner } from '../load-request.js';
 import { isAppReadRoute, type AppReadRoute } from './app-profile.js';
+import { isExecutableWrite, type ExecutableWrite, type WritePlanner } from './write-planner.js';
 import { IdPool } from './id-pool.js';
 
 /** Valeurs de nativapp (origin/main) reprises telles quelles. */
@@ -21,7 +22,9 @@ const POST_SOURCE: AppReadRoute = 'ranking-feed';
 const EVENT_SOURCE: AppReadRoute = 'ranking-events';
 
 export interface AppPlannerOptions {
-  mix: readonly { route: AppReadRoute; weight: number }[];
+  mix: readonly { route: AppReadRoute | ExecutableWrite; weight: number }[];
+  /** Ecritures du pool load : obligatoire des qu'une route d'ecriture est dans le melange. */
+  writes?: WritePlanner;
   actors: readonly UserAuthCredentials[];
   /** Horloge des dates de recherche, en millisecondes, injectable pour les tests. */
   nowMs?: () => number;
@@ -59,10 +62,19 @@ export class AppPlanner implements TargetPlanner {
   constructor(private readonly options: AppPlannerOptions) {
     this.nowMs = options.nowMs ?? (() => Date.now());
     for (const actor of options.actors) this.users.add(actor.id);
+    if (!options.writes && options.mix.some((m) => isExecutableWrite(m.route))) {
+      throw new Error('Ecritures dans le melange sans pool de charge');
+    }
   }
 
   describe(): string {
-    return `app-v1 lectures : ${this.options.mix.map((m) => `${m.route}:${m.weight}`).join(',')}`;
+    const label = this.options.writes ? 'lectures et ecritures' : 'lectures';
+    return `app-v1 ${label} : ${this.options.mix.map((m) => `${m.route}:${m.weight}`).join(',')}`;
+  }
+
+  /** Type d'une route pour le rapport : `write` ou `read`. */
+  kindOf(route: string): 'read' | 'write' {
+    return isExecutableWrite(route) ? 'write' : 'read';
   }
 
   pick(rng: () => number): string {
@@ -70,6 +82,7 @@ export class AppPlanner implements TargetPlanner {
   }
 
   build(route: string, actor: UserAuthCredentials, rng: () => number): LoadTarget {
+    if (isExecutableWrite(route) && this.options.writes) return this.options.writes.build(route, rng);
     if (!isAppReadRoute(route)) throw new Error(`Route d'app inconnue : ${route}`);
     const page = 1 + Math.floor(rng() * 3);
     switch (route) {
@@ -135,7 +148,11 @@ export class AppPlanner implements TargetPlanner {
     }
   }
 
-  observe(_target: LoadTarget, response: LoadResponse): void {
+  observe(target: LoadTarget, response: LoadResponse): void {
+    if (this.options.writes && isExecutableWrite(target.route)) {
+      this.options.writes.observe(target, response);
+      return;
+    }
     if (response.body === undefined) return;
     for (const post of listOf(response.body, 'posts')) {
       this.posts.add(post.id);

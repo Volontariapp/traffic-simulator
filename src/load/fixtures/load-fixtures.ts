@@ -12,6 +12,8 @@ export type FixtureApi = Pick<
   | 'unfollowUser'
   | 'unwishEvent'
   | 'unparticipateEvent'
+  | 'listMyPostIds'
+  | 'deletePost'
 >;
 
 /** Prefixe des events de fixture : c'est lui qui les distingue de tout autre event du compte. */
@@ -36,6 +38,8 @@ export interface CleanupOptions {
 }
 
 export interface CleanupCounts {
+  /** Posts des comptes load (texte seul, crees par post-cycle) : toujours supprimes. */
+  posts: number;
   follows: number;
   wishes: number;
   participations: number;
@@ -53,11 +57,12 @@ export interface CleanupReport {
   failures: number;
 }
 
-const ZERO: CleanupCounts = { follows: 0, wishes: 0, participations: 0, events: 0 };
+const ZERO: CleanupCounts = { posts: 0, follows: 0, wishes: 0, participations: 0, events: 0 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function add(a: CleanupCounts, b: Partial<CleanupCounts>): CleanupCounts {
   return {
+    posts: a.posts + (b.posts ?? 0),
     follows: a.follows + (b.follows ?? 0),
     wishes: a.wishes + (b.wishes ?? 0),
     participations: a.participations + (b.participations ?? 0),
@@ -168,7 +173,13 @@ export class LoadFixtures {
       const ownFollows = follows.filter((id) => poolIds.has(id));
       const ownWishes = wished.filter((id) => fixtureIds.has(id));
       const ownJoins = joined.filter((id) => fixtureIds.has(id));
-      found = add(found, { follows: ownFollows.length, wishes: ownWishes.length, participations: ownJoins.length });
+      const posts = (await this.api.listMyPostIds(token)) ?? [];
+      found = add(found, {
+        posts: posts.length,
+        follows: ownFollows.length,
+        wishes: ownWishes.length,
+        participations: ownJoins.length,
+      });
       foreign = add(foreign, {
         follows: follows.length - ownFollows.length,
         wishes: wished.length - ownWishes.length,
@@ -178,6 +189,8 @@ export class LoadFixtures {
       await removeAll(ownFollows, (id) => this.api.unfollowUser(token, id));
       await removeAll(ownWishes, (id) => this.api.unwishEvent(token, id));
       await removeAll(ownJoins, (id) => this.api.unparticipateEvent(token, id));
+      // Un post supprime emporte ses likes et commentaires
+      await removeAll(posts, (id) => this.api.deletePost(token, id));
     });
 
     if (options.purgeEvents) {
@@ -200,7 +213,9 @@ export class LoadFixtures {
       const follows = (await this.api.listMyFollowIds(token)) ?? [];
       const wished = (await this.api.listMySocialEventIds(token, 'wished')) ?? [];
       const joined = (await this.api.listMySocialEventIds(token, 'participated')) ?? [];
+      const posts = (await this.api.listMyPostIds(token)) ?? [];
       remaining = add(remaining, {
+        posts: posts.length,
         follows: follows.filter((id) => poolIds.has(id)).length,
         wishes: wished.filter((id) => fixtureIds.has(id)).length,
         participations: joined.filter((id) => fixtureIds.has(id)).length,
